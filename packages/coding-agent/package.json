@@ -35,7 +35,7 @@
 		"format-prompts": "pnpm exec tsx scripts/format-prompts.ts",
 		"generate-docs-index": "pnpm exec tsx scripts/generate-docs-index.ts",
 		"prepack": "pnpm exec tsx scripts/generate-docs-index.ts",
-		"build:binary": "cd ../.. && pnpm --dir packages/stats exec tsx scripts/generate-client-bundle.ts && pnpm --dir packages/natives run embed:native && bun build --compile --define PI_COMPILED=true --root . ./packages/coding-agent/src/cli.ts --outfile packages/coding-agent/dist/omp && pnpm --dir packages/natives run embed:native --reset && pnpm --dir packages/stats exec tsx scripts/generate-client-bundle.ts --reset",
+		"build:binary": "node -e \"console.error('build:binary is not supported in the pnpm/Node workspace yet. Use the runtime CLI entry points instead.'); process.exit(1)\"",
 		"generate-template": "pnpm exec tsx scripts/generate-template.ts",
 		"test": "vitest run"
 	},

@@ -1,22 +1,39 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Glob } from "bun";
+import { fileURLToPath } from "node:url";
 
-const docsDir = path.resolve(import.meta.dir, "../../../docs");
-const outputPath = path.resolve(import.meta.dir, "../src/internal-urls/docs-index.generated.ts");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const docsDir = path.resolve(scriptDir, "../../../docs");
+const outputPath = path.resolve(scriptDir, "../src/internal-urls/docs-index.generated.ts");
 
-const glob = new Glob("**/*.md");
-const entries: string[] = [];
-for await (const relativePath of glob.scan(docsDir)) {
-	entries.push(relativePath.split(path.sep).join("/"));
+async function collectMarkdownFiles(dir: string, rootDir = dir): Promise<string[]> {
+	const entries = await fs.readdir(dir, { withFileTypes: true });
+	const files: string[] = [];
+
+	for (const entry of entries) {
+		const fullPath = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...(await collectMarkdownFiles(fullPath, rootDir)));
+			continue;
+		}
+
+		if (entry.isFile() && entry.name.endsWith(".md")) {
+			files.push(path.relative(rootDir, fullPath).split(path.sep).join("/"));
+		}
+	}
+
+	return files;
 }
+
+const entries = await collectMarkdownFiles(docsDir);
 entries.sort();
 
 const docsWithContent = await Promise.all(
 	entries.map(async relativePath => ({
 		relativePath,
-		content: await Bun.file(path.join(docsDir, relativePath)).text(),
+		content: await fs.readFile(path.join(docsDir, relativePath), "utf8"),
 	})),
 );
 
@@ -36,5 +53,6 @@ const output = [
 	"",
 ].join("\n");
 
-await Bun.write(outputPath, output);
+await fs.mkdir(path.dirname(outputPath), { recursive: true });
+await fs.writeFile(outputPath, output, "utf8");
 console.log(`Generated ${path.relative(process.cwd(), outputPath)} (${entries.length} docs)`);

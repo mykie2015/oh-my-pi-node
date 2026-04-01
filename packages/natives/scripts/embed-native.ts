@@ -1,10 +1,14 @@
+#!/usr/bin/env node
+
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const reset = process.argv.includes("--reset");
-const outputPath = path.join(import.meta.dir, "../src/embedded-addon.ts");
-const packageJsonPath = path.join(import.meta.dir, "../package.json");
-const nativeDir = path.join(import.meta.dir, "../native");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const outputPath = path.join(scriptDir, "../src/embedded-addon.ts");
+const packageJsonPath = path.join(scriptDir, "../package.json");
+const nativeDir = path.join(scriptDir, "../native");
 
 const stubContent = `export type EmbeddedAddonVariant = "modern" | "baseline" | "default";
 
@@ -23,7 +27,8 @@ export interface EmbeddedAddon {
 export const embeddedAddon: EmbeddedAddon | null = null;
 `;
 if (reset) {
-	await Bun.write(outputPath, stubContent);
+	await fs.mkdir(path.dirname(outputPath), { recursive: true });
+	await fs.writeFile(outputPath, stubContent, "utf8");
 	process.exit(0);
 }
 
@@ -41,8 +46,8 @@ async function fileExists(filePath: string): Promise<boolean> {
 		throw err;
 	}
 }
-const targetPlatform = Bun.env.TARGET_PLATFORM || process.platform;
-const targetArch = Bun.env.TARGET_ARCH || process.arch;
+const targetPlatform = process.env.TARGET_PLATFORM || process.platform;
+const targetArch = process.env.TARGET_ARCH || process.arch;
 const platformTag = `${targetPlatform}-${targetArch}`;
 const candidates: CandidateAddon[] =
 	targetArch === "x64"
@@ -64,7 +69,7 @@ if (available.length === 0) {
 	const expected = candidates.map(candidate => `  - ${candidate.filename}`).join("\n");
 	throw new Error(`No native addons found for ${platformTag}. Expected one of:\n${expected}`);
 }
-const packageJson = (await Bun.file(packageJsonPath).json()) as { version: string };
+const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as { version: string };
 const imports = available
 	.map(
 		(candidate, index) =>
@@ -79,4 +84,5 @@ const files = available
 	.join("\n");
 
 const content = `${imports}\n\nexport type EmbeddedAddonVariant = "modern" | "baseline" | "default";\n\nexport interface EmbeddedAddonFile {\n\tvariant: EmbeddedAddonVariant;\n\tfilename: string;\n\tfilePath: string;\n}\n\nexport interface EmbeddedAddon {\n\tplatformTag: string;\n\tversion: string;\n\tfiles: EmbeddedAddonFile[];\n}\n\nexport const embeddedAddon: EmbeddedAddon | null = {\n\tplatformTag: ${JSON.stringify(platformTag)},\n\tversion: ${JSON.stringify(packageJson.version)},\n\tfiles: [\n${files}\n\t],\n};\n`;
-await Bun.write(outputPath, content);
+await fs.mkdir(path.dirname(outputPath), { recursive: true });
+await fs.writeFile(outputPath, content, "utf8");

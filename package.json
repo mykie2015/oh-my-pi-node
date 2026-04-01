@@ -2,6 +2,7 @@
 	"name": "omp-monorepo",
 	"private": true,
 	"type": "module",
+	"packageManager": "pnpm@10.17.1",
 	"scripts": {
 		"install:dev": "pnpm install",
 		"dev": "node --import tsx --loader ./scripts/text-loader.mjs packages/coding-agent/src/cli.ts",
@@ -24,6 +25,7 @@
 		"bench:gen-fixtures": "pnpm --dir packages/react-edit-benchmark exec tsx src/generate.ts --react-dir /tmp/react-source --count-per-type 8",
 		"bench:edit": "pnpm --dir packages/react-edit-benchmark run start",
 		"prepublishOnly": "pnpm run check",
+		"prepare": "pnpm --dir packages/coding-agent run generate-docs-index",
 		"publish": "pnpm run prepublishOnly && pnpm -r publish --access public",
 		"publish:dry": "pnpm run prepublishOnly && pnpm -r publish --access public --dry-run",
 		"release": "pnpm exec tsx scripts/release.ts",

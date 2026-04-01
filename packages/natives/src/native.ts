@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, getNativesDir, logger } from "@oh-my-pi/pi-utils";
+import { $env, getNativesDir, logger, moduleDir, spawnProcessSync } from "@oh-my-pi/pi-utils";
 import packageJson from "../package.json";
 import type { NativeBindings } from "./bindings";
 import { embeddedAddon } from "./embedded-addon";
@@ -33,15 +33,15 @@ type CpuVariant = "modern" | "baseline";
 const require = createRequire(import.meta.url);
 const platformTag = `${process.platform}-${process.arch}`;
 const packageVersion = (packageJson as { version: string }).version;
-const nativeDir = path.join(import.meta.dir, "..", "native");
+const nativeDir = path.join(moduleDir(import.meta.url), "..", "native");
 const execDir = path.dirname(process.execPath);
 const versionedDir = path.join(getNativesDir(), packageVersion);
 const userDataDir =
 	process.platform === "win32"
-		? path.join(Bun.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp")
+		? path.join($env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp")
 		: path.join(os.homedir(), ".local", "bin");
 const isCompiledBinary =
-	Bun.env.PI_COMPILED ||
+	$env.PI_COMPILED ||
 	import.meta.url.includes("$bunfs") ||
 	import.meta.url.includes("~BUN") ||
 	import.meta.url.includes("%7EBUN");
@@ -69,8 +69,8 @@ function runCommand(command: string, args: string[]): string | null {
 	const cmdLine = `${command} '${args.join(" ")}'`;
 	return logger.time(`runCommand:${cmdLine}`, () => {
 		try {
-			const result = Bun.spawnSync([command, ...args], { stdout: "pipe", stderr: "pipe" });
-			if (result.exitCode !== 0) return null;
+			const result = spawnProcessSync(command, args, { stdio: "pipe" });
+			if (result.status !== 0 || !result.stdout) return null;
 			return result.stdout.toString("utf-8").trim();
 		} catch {
 			return null;
@@ -79,7 +79,7 @@ function runCommand(command: string, args: string[]): string | null {
 }
 
 function getVariantOverride(): CpuVariant | null {
-	const value = Bun.env.PI_NATIVE_VARIANT;
+	const value = $env.PI_NATIVE_VARIANT;
 	if (!value) return null;
 	if (value === "modern" || value === "baseline") return value;
 	return null;

@@ -25,7 +25,7 @@ import {
 	unregisterCustomApis,
 	unregisterOAuthProviders,
 } from "@oh-my-pi/pi-ai";
-import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { $env, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { type ConfigError, ConfigFile } from "../config";
 import { parseModelString } from "../config/model-resolver";
@@ -432,7 +432,7 @@ type LlamaCppDiscoveredServerMetadata = {
  * Checks environment variable first, then treats as literal.
  */
 function resolveApiKeyConfig(keyConfig: string): string | undefined {
-	const envValue = Bun.env[keyConfig];
+	const envValue = $env[keyConfig];
 	if (envValue) return envValue;
 	return keyConfig;
 }
@@ -969,36 +969,36 @@ export class ModelRegistry {
 
 	#addImplicitDiscoverableProviders(configuredProviders: Set<string>): void {
 		if (!configuredProviders.has("ollama")) {
-			this.#discoverableProviders.push({
-				provider: "ollama",
-				api: "openai-completions",
-				baseUrl: Bun.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
-				discovery: { type: "ollama" },
-				optional: true,
-			});
+				this.#discoverableProviders.push({
+					provider: "ollama",
+					api: "openai-completions",
+					baseUrl: $env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
+					discovery: { type: "ollama" },
+					optional: true,
+				});
 			this.#keylessProviders.add("ollama");
 		}
 		if (!configuredProviders.has("llama.cpp")) {
-			this.#discoverableProviders.push({
-				provider: "llama.cpp",
-				api: "openai-responses",
-				baseUrl: Bun.env.LLAMA_CPP_BASE_URL || "http://127.0.0.1:8080",
-				discovery: { type: "llama.cpp" },
-				optional: true,
-			});
+				this.#discoverableProviders.push({
+					provider: "llama.cpp",
+					api: "openai-responses",
+					baseUrl: $env.LLAMA_CPP_BASE_URL || "http://127.0.0.1:8080",
+					discovery: { type: "llama.cpp" },
+					optional: true,
+				});
 			// Only mark as keyless if no API key is configured
 			if (!this.authStorage.hasAuth("llama.cpp")) {
 				this.#keylessProviders.add("llama.cpp");
 			}
 		}
 		if (!configuredProviders.has("lm-studio")) {
-			this.#discoverableProviders.push({
-				provider: "lm-studio",
-				api: "openai-completions",
-				baseUrl: Bun.env.LM_STUDIO_BASE_URL || "http://127.0.0.1:1234/v1",
-				discovery: { type: "lm-studio" },
-				optional: true,
-			});
+				this.#discoverableProviders.push({
+					provider: "lm-studio",
+					api: "openai-completions",
+					baseUrl: $env.LM_STUDIO_BASE_URL || "http://127.0.0.1:1234/v1",
+					discovery: { type: "lm-studio" },
+					optional: true,
+				});
 			this.#keylessProviders.add("lm-studio");
 		}
 	}

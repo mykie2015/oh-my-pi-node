@@ -1,4 +1,4 @@
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, hashText64Base36 } from "@oh-my-pi/pi-utils";
 import type { ResponseInput } from "openai/resources/responses/responses";
 import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
 
@@ -38,7 +38,7 @@ export function normalizeResponsesToolCallId(id: string): { callId: string; item
 		const normalizedItemId = normalizeResponsesItemId(itemId);
 		return { callId: normalizedCallId, itemId: normalizedItemId };
 	}
-	const hash = Bun.hash.xxHash64(id).toString(36);
+	const hash = hashText64Base36(id);
 	const normalizedCallId = id.startsWith("call_") ? truncateResponseItemId(id, "call") : `call_${hash}`;
 	return { callId: normalizedCallId, itemId: `fc_${hash}` };
 }
@@ -51,7 +51,7 @@ function getIdPrefix(id: string, fallback: string): string {
 function normalizeResponsesItemId(itemId: string): string {
 	const prefix = getIdPrefix(itemId, "fc");
 	if (prefix !== "fc" && prefix !== "fcr") {
-		return `fc_${Bun.hash.xxHash64(itemId).toString(36)}`;
+		return `fc_${hashText64Base36(itemId)}`;
 	}
 	return truncateResponseItemId(itemId, prefix);
 }
@@ -62,7 +62,7 @@ function normalizeResponsesItemId(itemId: string): string {
  */
 export function truncateResponseItemId(id: string, prefix: string): string {
 	if (id.length <= 64) return id;
-	return `${prefix}_${Bun.hash.xxHash64(id).toString(36)}`;
+	return `${prefix}_${hashText64Base36(id)}`;
 }
 
 export function sanitizeOpenAIResponsesHistoryItemsForReplay(items: Array<Record<string, unknown>>): ResponseInput {

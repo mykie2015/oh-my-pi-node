@@ -10,7 +10,7 @@ import {
 	startMacAppearanceObserver as startNativeMacObserver,
 } from "@oh-my-pi/pi-natives";
 import type { EditorTheme, MarkdownTheme, SelectListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
-import { adjustHsv, getCustomThemesDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { $env, adjustHsv, getCustomThemesDir, hexToRgb, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { TypeCompiler } from "@sinclair/typebox/compiler";
 import chalk from "chalk";
@@ -1041,15 +1041,15 @@ type ColorMode = "truecolor" | "256color";
 // ============================================================================
 
 function detectColorMode(): ColorMode {
-	const colorterm = Bun.env.COLORTERM;
+	const colorterm = $env.COLORTERM;
 	if (colorterm === "truecolor" || colorterm === "24bit") {
 		return "truecolor";
 	}
 	// Windows Terminal supports truecolor
-	if (Bun.env.WT_SESSION) {
+	if ($env.WT_SESSION) {
 		return "truecolor";
 	}
-	const term = Bun.env.TERM || "";
+	const term = $env.TERM || "";
 	// Only fall back to 256color for truly limited terminals
 	if (term === "dumb" || term === "" || term === "linux") {
 		return "256color";
@@ -1058,13 +1058,22 @@ function detectColorMode(): ColorMode {
 	return "truecolor";
 }
 
+function rgbTo256(r: number, g: number, b: number): number {
+	const rIndex = Math.round((r / 255) * 5);
+	const gIndex = Math.round((g / 255) * 5);
+	const bIndex = Math.round((b / 255) * 5);
+	return 16 + 36 * rIndex + 6 * gIndex + bIndex;
+}
+
 function colorToAnsi(color: string, mode: ColorMode): string {
-	const format = mode === "truecolor" ? "ansi-16m" : "ansi-256";
-	const ansi = Bun.color(color, format);
-	if (ansi === null) {
+	if (!color.startsWith("#")) {
 		throw new Error(`Invalid color value: ${color}`);
 	}
-	return ansi;
+	const { r, g, b } = hexToRgb(color);
+	if (mode === "truecolor") {
+		return `\x1b[38;2;${r};${g};${b}m`;
+	}
+	return `\x1b[38;5;${rgbTo256(r, g, b)}m`;
 }
 
 function fgAnsi(color: string | number, mode: ColorMode): string {
@@ -1592,7 +1601,7 @@ async function loadThemeJson(name: string): Promise<ThemeJson> {
 	const themePath = path.join(customThemesDir, `${name}.json`);
 	let content: string;
 	try {
-		content = await Bun.file(themePath).text();
+		content = await fs.promises.readFile(themePath, "utf8");
 	} catch (err) {
 		if (isEnoent(err)) throw new Error(`Theme not found: ${name}`);
 		throw err;
@@ -1702,7 +1711,7 @@ function shouldUseMacOSAppearanceFallback(): boolean {
 	// Zellij currently breaks OSC 11 passthrough on macOS, so terminal-derived
 	// appearance cannot be trusted there. Fall back to host macOS appearance
 	// without letting it override valid terminal signals elsewhere.
-	return process.platform === "darwin" && !!Bun.env.ZELLIJ;
+	return process.platform === "darwin" && !!$env.ZELLIJ;
 }
 
 function detectTerminalBackground(): "dark" | "light" {
@@ -1712,7 +1721,7 @@ function detectTerminalBackground(): "dark" | "light" {
 	}
 
 	// Tier 2: COLORFGBG env var (static at process start, but still terminal-derived).
-	const colorfgbg = Bun.env.COLORFGBG || "";
+	const colorfgbg = $env.COLORFGBG || "";
 	if (colorfgbg) {
 		const parts = colorfgbg.split(";");
 		if (parts.length >= 2) {

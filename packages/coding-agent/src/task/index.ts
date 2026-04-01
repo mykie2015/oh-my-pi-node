@@ -17,8 +17,7 @@ import * as os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { $env, Snowflake } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { $env, Snowflake, spawnProcessSync } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
@@ -102,6 +101,14 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
 	target.cost.cacheRead += cost.cacheRead;
 	target.cost.cacheWrite += cost.cacheWrite;
 	target.cost.total += cost.total;
+}
+
+function runGit(repoRoot: string, args: readonly string[]): { exitCode: number | null; stderr: string } {
+	const result = spawnProcessSync("git", args, { cwd: repoRoot, stdio: "pipe" });
+	return {
+		exitCode: result.error ? null : (result.status ?? null),
+		stderr: result.stderr?.toString("utf8").trim() ?? result.error?.message ?? "",
+	};
 }
 
 // Re-export types and utilities
@@ -701,7 +708,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			let contextFilePath: string | undefined;
 			if (compactContext) {
 				contextFilePath = path.join(effectiveArtifactsDir, "context.md");
-				await Bun.write(contextFilePath, compactContext);
+				await fs.writeFile(contextFilePath, compactContext, "utf8");
 			}
 
 			// Build full prompts with context prepended
@@ -864,7 +871,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						} catch (mergeErr) {
 							// Agent succeeded but branch commit failed — clean up stale branch
 							const branchName = `omp/task/${task.id}`;
-							await $`git branch -D ${branchName}`.cwd(repoRoot).quiet().nothrow();
+							runGit(repoRoot, ["branch", "-D", branchName]);
 							const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
 							return { ...result, error: `Merge failed: ${msg}` };
 						}
@@ -873,7 +880,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						try {
 							const delta = await captureDeltaPatch(isolationDir, taskBaseline);
 							const patchPath = path.join(effectiveArtifactsDir, `${task.id}.patch`);
-							await Bun.write(patchPath, delta.rootPatch);
+							await fs.writeFile(patchPath, delta.rootPatch, "utf8");
 							return {
 								...result,
 								patchPath,
@@ -1025,7 +1032,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							changesApplied = true;
 						} else {
 							const patchTexts = await Promise.all(
-								nonEmptyPatches.map(async patchPath => Bun.file(patchPath).text()),
+								nonEmptyPatches.map(async patchPath => fs.readFile(patchPath, "utf8")),
 							);
 							const combinedPatch = patchTexts.map(text => (text.endsWith("\n") ? text : `${text}\n`)).join("");
 							if (!combinedPatch.trim()) {
@@ -1033,18 +1040,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							} else {
 								const combinedPatchPath = path.join(os.tmpdir(), `omp-task-combined-${Snowflake.next()}.patch`);
 								try {
-									await Bun.write(combinedPatchPath, combinedPatch);
-									const checkResult = await $`git apply --check --binary ${combinedPatchPath}`
-										.cwd(repoRoot)
-										.quiet()
-										.nothrow();
+									await fs.writeFile(combinedPatchPath, combinedPatch, "utf8");
+									const checkResult = runGit(repoRoot, ["apply", "--check", "--binary", combinedPatchPath]);
 									if (checkResult.exitCode !== 0) {
 										changesApplied = false;
 									} else {
-										const applyResult = await $`git apply --binary ${combinedPatchPath}`
-											.cwd(repoRoot)
-											.quiet()
-											.nothrow();
+										const applyResult = runGit(repoRoot, ["apply", "--binary", combinedPatchPath]);
 										changesApplied = applyResult.exitCode === 0;
 									}
 								} finally {

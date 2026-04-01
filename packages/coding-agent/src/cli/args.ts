@@ -1,11 +1,46 @@
 /**
  * CLI argument parsing and help display
  */
-import { type Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { APP_NAME, CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import { parseEffort } from "../thinking";
-import { BUILTIN_TOOLS } from "../tools";
+
+type Effort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+const THINKING_EFFORTS: readonly Effort[] = ["minimal", "low", "medium", "high", "xhigh"];
+const BUILTIN_TOOL_NAMES = new Set([
+	"ast_grep",
+	"ast_edit",
+	"render_mermaid",
+	"ask",
+	"bash",
+	"python",
+	"calc",
+	"ssh",
+	"edit",
+	"find",
+	"grep",
+	"lsp",
+	"notebook",
+	"read",
+	"inspect_image",
+	"browser",
+	"checkpoint",
+	"rewind",
+	"task",
+	"cancel_job",
+	"await",
+	"todo_write",
+	"fetch",
+	"web_search",
+	"search_tool_bm25",
+	"write",
+]);
+
+function parseEffort(value: string | null | undefined): Effort | undefined {
+	return value !== undefined && value !== null && THINKING_EFFORTS.includes(value as Effort)
+		? (value as Effort)
+		: undefined;
+}
 
 export type Mode = "text" | "json" | "rpc" | "acp";
 
@@ -121,12 +156,12 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 				.filter(Boolean);
 			const validTools: string[] = [];
 			for (const name of toolNames) {
-				if (name in BUILTIN_TOOLS) {
+				if (BUILTIN_TOOL_NAMES.has(name)) {
 					validTools.push(name);
 				} else {
 					logger.warn("Unknown tool passed to --tools", {
 						tool: name,
-						validTools: Object.keys(BUILTIN_TOOLS),
+						validTools: [...BUILTIN_TOOL_NAMES],
 					});
 				}
 			}

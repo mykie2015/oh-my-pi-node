@@ -1,3 +1,4 @@
+import { $env } from "@oh-my-pi/pi-utils";
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels, getBundledProviders } from "../models";
 import type { Api, Model } from "../types";
@@ -7,6 +8,8 @@ import {
 	type OpenAICompatibleModelMapperContext,
 	type OpenAICompatibleModelRecord,
 } from "../utils/discovery/openai-compatible";
+import { resolveOpenAIBaseUrl } from "../utils/openai-base-url";
+import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./default-model-limits";
 import { getGitHubCopilotBaseUrl } from "../utils/oauth/github-copilot";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -336,7 +339,7 @@ export interface OpenAIModelManagerConfig {
 
 export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): ModelManagerOptions<"openai-responses"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.openai.com/v1";
+	const baseUrl = resolveOpenAIBaseUrl(config?.baseUrl);
 	const references = createBundledReferenceMap<"openai-responses">("openai");
 	return {
 		providerId: "openai",
@@ -987,7 +990,7 @@ export function lmStudioModelManagerOptions(
 	config?: LmStudioModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? Bun.env.LM_STUDIO_BASE_URL ?? "http://127.0.0.1:1234/v1";
+	const baseUrl = config?.baseUrl ?? $env.LM_STUDIO_BASE_URL ?? "http://127.0.0.1:1234/v1";
 	const references = createBundledReferenceMap<"openai-completions">("lm-studio" as any);
 	return {
 		providerId: "lm-studio",
@@ -1651,8 +1654,7 @@ export function anthropicModelManagerOptions(
 // Models.dev provider descriptors for generate-models.ts
 // ---------------------------------------------------------------------------
 
-export const UNK_CONTEXT_WINDOW = 222_222;
-export const UNK_MAX_TOKENS = 8_888;
+export { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./default-model-limits";
 
 /** Describes how to map models.dev API data for a single provider. */
 export interface ModelsDevProviderDescriptor {
@@ -1944,7 +1946,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		"https://generativelanguage.googleapis.com/v1beta",
 	),
 	// --- OpenAI ---
-	simpleModelsDevDescriptor("openai", "openai", "openai-responses", "https://api.openai.com/v1"),
+	simpleModelsDevDescriptor("openai", "openai", "openai-responses", resolveOpenAIBaseUrl()),
 	// --- Groq ---
 	openAiCompletionsDescriptor("groq", "groq", "https://api.groq.com/openai/v1"),
 	// --- Cerebras ---

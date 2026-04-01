@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { hashText64Base36 } from "@oh-my-pi/pi-utils";
 import type {
 	ResponseFunctionToolCall,
 	ResponseInput,
@@ -68,7 +69,7 @@ export function normalizeResponsesToolCallIdForTransform(
 			return truncated.replace(/_+$/, "");
 		};
 		const normalizedCallId = normalizeIdPart(callId);
-		let normalizedItemId = `fc_${Bun.hash(itemId).toString(36)}`;
+		let normalizedItemId = `fc_${hashText64Base36(itemId)}`;
 		if (normalizedItemId.length > 64) normalizedItemId = normalizedItemId.slice(0, 64);
 		return `${normalizedCallId}|${normalizedItemId}`;
 	}
@@ -143,7 +144,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			if (!msgId) {
 				msgId = `msg_${msgIndex}`;
 			} else if (msgId.length > 64) {
-				msgId = `msg_${Bun.hash.xxHash64(msgId).toString(36)}`;
+				msgId = `msg_${hashText64Base36(msgId)}`;
 			}
 			outputItems.push({
 				type: "message",

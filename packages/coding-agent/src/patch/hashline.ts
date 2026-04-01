@@ -11,7 +11,7 @@
  * Displayed format: `LINENUM#HASH:TEXT`
  * Reference format: `"LINENUM#HASH"` (e.g. `"5#aa"`)
  */
-
+import { $env, hashValue32WithSeed } from "@oh-my-pi/pi-utils";
 import type { HashMismatch } from "./types";
 
 export type Anchor = { line: number; hash: string };
@@ -48,7 +48,7 @@ export function computeLineHash(idx: number, line: string): string {
 	if (!RE_SIGNIFICANT.test(line)) {
 		seed = idx;
 	}
-	return DICT[Bun.hash.xxHash32(line, seed) & 0xff];
+	return DICT[hashValue32WithSeed(line, seed) & 0xff];
 }
 
 /**
@@ -412,7 +412,7 @@ export function validateLineRef(ref: { line: number; hash: string }, fileLines: 
 }
 
 function isEscapedTabAutocorrectEnabled(): boolean {
-	switch (Bun.env.PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS) {
+	switch ($env.PI_HASHLINE_AUTOCORRECT_ESCAPED_TABS) {
 		case "0":
 			return false;
 		case "1":

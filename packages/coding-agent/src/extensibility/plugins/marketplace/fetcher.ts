@@ -7,8 +7,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { isEnoent, logger, spawnProcessSync, whichSync } from "@oh-my-pi/pi-utils";
 
 import type { MarketplaceCatalog, MarketplaceSourceType } from "./types";
 import { isValidNameSegment } from "./types";
@@ -206,7 +205,7 @@ export async function fetchMarketplace(source: string, cacheDir: string): Promis
 
 		let content: string;
 		try {
-			content = await Bun.file(catalogPath).text();
+			content = await fs.readFile(catalogPath, "utf8");
 		} catch (err) {
 			if (isEnoent(err)) {
 				throw new Error(
@@ -241,7 +240,8 @@ export async function fetchMarketplace(source: string, cacheDir: string): Promis
 	const catalog = parseMarketplaceCatalog(text, source);
 
 	const catalogDir = path.join(cacheDir, catalog.name);
-	await Bun.write(path.join(catalogDir, "marketplace.json"), text);
+	await fs.mkdir(catalogDir, { recursive: true });
+	await fs.writeFile(path.join(catalogDir, "marketplace.json"), text);
 
 	return { catalog };
 }
@@ -256,7 +256,7 @@ export async function fetchMarketplace(source: string, cacheDir: string): Promis
  * `promoteCloneToCache` after any duplicate/drift checks pass.
  */
 async function cloneAndReadCatalog(url: string, cacheDir: string): Promise<FetchResult> {
-	if (!Bun.which("git")) {
+	if (!whichSync("git")) {
 		throw new Error("git is not installed. Install git to use git-based marketplace sources.");
 	}
 
@@ -265,17 +265,23 @@ async function cloneAndReadCatalog(url: string, cacheDir: string): Promise<Fetch
 
 	logger.debug(`[marketplace] cloning ${url} → ${tmpDir}`);
 
-	const result = await $`git clone --depth 1 --single-branch ${url} ${tmpDir}`.quiet().nothrow();
-	if (result.exitCode !== 0) {
+	const result = spawnProcessSync("git", ["clone", "--depth", "1", "--single-branch", url, tmpDir], {
+		stdio: "pipe",
+	});
+	if (result.error) {
 		await fs.rm(tmpDir, { recursive: true, force: true });
-		const stderr = result.stderr.toString().trim();
-		throw new Error(`git clone failed (exit ${result.exitCode}): ${stderr || "unknown error"}`);
+		throw result.error;
+	}
+	if (result.status !== 0) {
+		await fs.rm(tmpDir, { recursive: true, force: true });
+		const stderr = result.stderr?.toString("utf8").trim();
+		throw new Error(`git clone failed (exit ${result.status ?? "unknown"}): ${stderr || "unknown error"}`);
 	}
 
 	const catalogPath = path.join(tmpDir, CATALOG_RELATIVE_PATH);
 	let content: string;
 	try {
-		content = await Bun.file(catalogPath).text();
+		content = await fs.readFile(catalogPath, "utf8");
 	} catch (err) {
 		await fs.rm(tmpDir, { recursive: true, force: true });
 		if (isEnoent(err)) {
@@ -322,7 +328,7 @@ export async function cloneGitRepo(
 	targetDir: string,
 	options?: { ref?: string; sha?: string },
 ): Promise<void> {
-	if (!Bun.which("git")) {
+	if (!whichSync("git")) {
 		throw new Error("git is not installed. Install git to use git-based plugin sources.");
 	}
 
@@ -336,17 +342,26 @@ export async function cloneGitRepo(
 
 	logger.debug("[marketplace] cloning plugin source", { url, targetDir });
 
-	const result = await $`${cloneArgs}`.quiet().nothrow();
-	if (result.exitCode !== 0) {
+	const [command, ...args] = cloneArgs;
+	const result = spawnProcessSync(command, args, { stdio: "pipe" });
+	if (result.error) {
 		await fs.rm(targetDir, { recursive: true, force: true });
-		const stderr = result.stderr.toString().trim();
-		throw new Error(`git clone failed (exit ${result.exitCode}): ${stderr || "unknown error"}`);
+		throw result.error;
+	}
+	if (result.status !== 0) {
+		await fs.rm(targetDir, { recursive: true, force: true });
+		const stderr = result.stderr?.toString("utf8").trim();
+		throw new Error(`git clone failed (exit ${result.status ?? "unknown"}): ${stderr || "unknown error"}`);
 	}
 
 	// If a specific SHA is requested, checkout that commit
 	if (options?.sha) {
-		const checkout = await $`git -C ${targetDir} checkout ${options.sha}`.quiet().nothrow();
-		if (checkout.exitCode !== 0) {
+		const checkout = spawnProcessSync("git", ["-C", targetDir, "checkout", options.sha], { stdio: "pipe" });
+		if (checkout.error) {
+			await fs.rm(targetDir, { recursive: true, force: true });
+			throw checkout.error;
+		}
+		if (checkout.status !== 0) {
 			await fs.rm(targetDir, { recursive: true, force: true });
 			throw new Error(`Failed to checkout SHA ${options.sha} — shallow clone may not contain this commit`);
 		}

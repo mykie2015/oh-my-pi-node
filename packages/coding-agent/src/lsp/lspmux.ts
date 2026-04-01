@@ -1,7 +1,7 @@
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, logger } from "@oh-my-pi/pi-utils";
-import { TOML } from "bun";
+import { $env, logger, spawnProcessSync, whichSync } from "@oh-my-pi/pi-utils";
 
 /**
  * lspmux integration for LSP server multiplexing.
@@ -66,11 +66,11 @@ function getConfigPath(): string {
 	const home = os.homedir();
 	switch (os.platform()) {
 		case "win32":
-			return path.join(Bun.env.APPDATA ?? path.join(home, "AppData", "Roaming"), "lspmux", "config.toml");
+			return path.join($env.APPDATA ?? path.join(home, "AppData", "Roaming"), "lspmux", "config.toml");
 		case "darwin":
 			return path.join(home, "Library", "Application Support", "lspmux", "config.toml");
 		default:
-			return path.join(Bun.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "lspmux", "config.toml");
+			return path.join($env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "lspmux", "config.toml");
 	}
 }
 
@@ -81,16 +81,76 @@ function getConfigPath(): string {
 let cachedState: LspmuxState | null = null;
 let cacheTimestamp = 0;
 
+function splitTomlArrayItems(raw: string): string[] {
+	const items: string[] = [];
+	let current = "";
+	let quote: '"' | "'" | null = null;
+	for (let i = 0; i < raw.length; i++) {
+		const char = raw[i];
+		if (quote) {
+			if (char === quote && raw[i - 1] !== "\\") {
+				quote = null;
+			}
+			current += char;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			current += char;
+			continue;
+		}
+		if (char === ",") {
+			items.push(current.trim());
+			current = "";
+			continue;
+		}
+		current += char;
+	}
+	if (current.trim().length > 0) {
+		items.push(current.trim());
+	}
+	return items;
+}
+
+function parseTomlValue(raw: string): unknown {
+	const value = raw.trim();
+	if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+		return value.slice(1, -1);
+	}
+	if (value.startsWith("[") && value.endsWith("]")) {
+		return splitTomlArrayItems(value.slice(1, -1)).map(item => parseTomlValue(item));
+	}
+	if (value === "true") return true;
+	if (value === "false") return false;
+	if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
+	return value;
+}
+
+function parseLooseToml(content: string): LspmuxConfig {
+	const config: Record<string, unknown> = {};
+	for (const line of content.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("[")) {
+			continue;
+		}
+		const eqIndex = trimmed.indexOf("=");
+		if (eqIndex === -1) {
+			continue;
+		}
+		const key = trimmed.slice(0, eqIndex).trim();
+		const rawValue = trimmed.slice(eqIndex + 1).trim();
+		config[key] = parseTomlValue(rawValue);
+	}
+	return config as LspmuxConfig;
+}
+
 /**
  * Parse lspmux config.toml file.
  */
 async function parseConfig(): Promise<LspmuxConfig | null> {
 	try {
-		const file = Bun.file(getConfigPath());
-		if (!(await file.exists())) {
-			return null;
-		}
-		return TOML.parse(await file.text()) as LspmuxConfig;
+		const content = await fs.readFile(getConfigPath(), "utf8");
+		return parseLooseToml(content);
 	} catch {
 		return null;
 	}
@@ -101,23 +161,12 @@ async function parseConfig(): Promise<LspmuxConfig | null> {
  */
 async function checkServerRunning(binaryPath: string): Promise<boolean> {
 	try {
-		const proc = Bun.spawn([binaryPath, "status"], {
-			stdout: "pipe",
-			stderr: "pipe",
+		const result = spawnProcessSync(binaryPath, ["status"], {
+			stdio: "pipe",
 			windowsHide: true,
+			timeout: LIVENESS_TIMEOUT_MS,
 		});
-
-		const exited = await Promise.race([
-			proc.exited,
-			new Promise<null>(resolve => setTimeout(() => resolve(null), LIVENESS_TIMEOUT_MS)),
-		]);
-
-		if (exited === null) {
-			proc.kill();
-			return false;
-		}
-
-		return exited === 0;
+		return result.status === 0;
 	} catch {
 		return false;
 	}
@@ -141,7 +190,7 @@ export async function detectLspmux(): Promise<LspmuxState> {
 		return cachedState;
 	}
 
-	const binaryPath = Bun.which("lspmux");
+	const binaryPath = whichSync("lspmux") ?? null;
 	if (!binaryPath) {
 		cachedState = { available: false, running: false, binaryPath: null, config: null };
 		cacheTimestamp = now;

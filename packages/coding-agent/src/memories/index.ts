@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from "@oh-my-pi/pi-utils/runtime/sqlite";
 import type * as fsNode from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";

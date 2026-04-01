@@ -1,4 +1,4 @@
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, readTextFile } from "@oh-my-pi/pi-utils";
 
 export interface ChangelogEntry {
 	major: number;
@@ -13,7 +13,7 @@ export interface ChangelogEntry {
  */
 export async function parseChangelog(changelogPath: string): Promise<ChangelogEntry[]> {
 	try {
-		const content = await Bun.file(changelogPath).text();
+		const content = await readTextFile(changelogPath);
 		const lines = content.split("\n");
 		const entries: ChangelogEntry[] = [];
 

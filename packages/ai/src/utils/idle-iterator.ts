@@ -1,4 +1,5 @@
 import { $env } from "@oh-my-pi/pi-utils";
+import { isLocalOpenAIBaseUrl } from "./openai-base-url";
 
 const DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS = 45_000;
 const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 15_000;
@@ -31,6 +32,21 @@ export function getStreamFirstEventTimeoutMs(idleTimeoutMs?: number): number | u
 		idleTimeoutMs ?? DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS,
 	);
 	return normalizeIdleTimeoutMs($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS, fallback);
+}
+
+export function getOpenAIFirstEventTimeoutMs(options: {
+	idleTimeoutMs?: number;
+	baseUrl?: string;
+	provider?: string;
+}): number | undefined {
+	const configuredTimeoutMs = getStreamFirstEventTimeoutMs(options.idleTimeoutMs);
+	if ($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS !== undefined) {
+		return configuredTimeoutMs;
+	}
+	if (options.provider === "ollama" || isLocalOpenAIBaseUrl(options.baseUrl)) {
+		return options.idleTimeoutMs;
+	}
+	return configuredTimeoutMs;
 }
 
 export interface FirstEventWatchdog {

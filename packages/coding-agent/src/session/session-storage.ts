@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, toError } from "@oh-my-pi/pi-utils";
+import { isEnoent, readTextFile, scanGlobSync, toError, writeTextFileEnsured } from "@oh-my-pi/pi-utils";
 
 export interface SessionStorageStat {
 	size: number;
@@ -142,7 +142,7 @@ export class FileSessionStorage implements SessionStorage {
 
 	listFilesSync(dir: string, pattern: string): string[] {
 		try {
-			return Array.from(new Bun.Glob(pattern).scanSync(dir)).map(name => path.join(dir, name));
+			return scanGlobSync(pattern, dir).map(name => path.join(dir, name));
 		} catch {
 			return [];
 		}
@@ -159,15 +159,22 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	readText(path: string): Promise<string> {
-		return Bun.file(path).text();
+		return readTextFile(path);
 	}
 
 	async readTextPrefix(path: string, maxBytes: number): Promise<string> {
-		return Bun.file(path).slice(0, maxBytes).text();
+		const handle = await fsp.open(path, "r");
+		try {
+			const buffer = Buffer.alloc(maxBytes);
+			const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+			return buffer.subarray(0, bytesRead).toString("utf8");
+		} finally {
+			await handle.close();
+		}
 	}
 
 	async writeText(path: string, content: string): Promise<void> {
-		await Bun.write(path, content, { createPath: true });
+		await writeTextFileEnsured(path, content);
 	}
 
 	async rename(path: string, nextPath: string): Promise<void> {

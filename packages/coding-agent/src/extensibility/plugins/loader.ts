@@ -20,7 +20,7 @@ import type { InstalledPlugin, PluginManifest, PluginRuntimeConfig, ProjectPlugi
 async function loadRuntimeConfig(): Promise<PluginRuntimeConfig> {
 	const lockPath = getPluginsLockfile();
 	try {
-		return await Bun.file(lockPath).json();
+		return JSON.parse(await fs.promises.readFile(lockPath, "utf8")) as PluginRuntimeConfig;
 	} catch (err) {
 		if (isEnoent(err)) return { plugins: {}, settings: {} };
 		throw err;
@@ -33,7 +33,7 @@ async function loadRuntimeConfig(): Promise<PluginRuntimeConfig> {
 async function loadProjectOverrides(cwd: string): Promise<ProjectPluginOverrides> {
 	for (const overridesPath of getConfigDirPaths("plugin-overrides.json", { user: false, cwd })) {
 		try {
-			return await Bun.file(overridesPath).json();
+			return JSON.parse(await fs.promises.readFile(overridesPath, "utf8")) as ProjectPluginOverrides;
 		} catch (err) {
 			if (isEnoent(err)) continue;
 			// JSON parse error - continue to next path
@@ -54,7 +54,7 @@ export async function getEnabledPlugins(cwd: string): Promise<InstalledPlugin[]>
 	const pkgJsonPath = getPluginsPackageJson();
 	let pkg: { dependencies?: Record<string, string> };
 	try {
-		pkg = await Bun.file(pkgJsonPath).json();
+		pkg = JSON.parse(await fs.promises.readFile(pkgJsonPath, "utf8")) as { dependencies?: Record<string, string> };
 	} catch (err) {
 		if (isEnoent(err)) return [];
 		throw err;
@@ -74,7 +74,11 @@ export async function getEnabledPlugins(cwd: string): Promise<InstalledPlugin[]>
 		const pluginPkgPath = path.join(nodeModulesPath, name, "package.json");
 		let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
 		try {
-			pluginPkg = await Bun.file(pluginPkgPath).json();
+			pluginPkg = JSON.parse(await fs.promises.readFile(pluginPkgPath, "utf8")) as {
+				version: string;
+				omp?: PluginManifest;
+				pi?: PluginManifest;
+			};
 		} catch (err) {
 			if (isEnoent(err)) continue;
 			throw err;

@@ -1441,7 +1441,7 @@ export class AgentSession {
 	): Promise<void> {
 		if (this.#streamingEditAbortTriggered) return;
 		try {
-			const { text } = stripBom(await Bun.file(resolvedPath).text());
+			const { text } = stripBom(await fs.promises.readFile(resolvedPath, "utf8"));
 			const normalizedContent = normalizeToLF(text);
 			const missing = removedLines.find(line => !normalizedContent.includes(normalizeToLF(line)));
 			if (missing) {
@@ -2146,7 +2146,7 @@ export class AgentSession {
 		});
 		let planContent: string;
 		try {
-			planContent = await Bun.file(resolvedPlanPath).text();
+			planContent = await fs.promises.readFile(resolvedPlanPath, "utf8");
 		} catch (error) {
 			if (isEnoent(error)) {
 				return null;
@@ -3800,7 +3800,7 @@ export class AgentSession {
 					const fileTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
 					const handoffFilePath = path.join(artifactsDir, `handoff-${fileTimestamp}.md`);
 					try {
-						await Bun.write(handoffFilePath, `${handoffText}\n`);
+						await fs.promises.writeFile(handoffFilePath, `${handoffText}\n`, "utf8");
 						savedPath = handoffFilePath;
 					} catch (error) {
 						logger.warn("Failed to save handoff document to disk", {

@@ -1,8 +1,8 @@
-import { Database, type Statement } from "bun:sqlite";
+import { Database, type Statement } from "@oh-my-pi/pi-utils/runtime/sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type AuthCredential, AuthCredentialStore, type StoredAuthCredential } from "@oh-my-pi/pi-ai";
-import { getAgentDbPath, isRecord, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, isRecord, logger, sleep } from "@oh-my-pi/pi-utils";
 import type { RawSettings as Settings } from "../config/settings";
 
 /** Row shape for settings table queries */
@@ -227,7 +227,7 @@ FROM model_usage_legacy
 				}
 				lastError = err as Error;
 				const delayMs = baseDelayMs * 2 ** attempt;
-				await Bun.sleep(delayMs);
+				await sleep(delayMs);
 			}
 		}
 

@@ -1,8 +1,10 @@
-import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
+
+const require = createRequire(import.meta.url);
 
 /**
  * Minimal terminal interface for TUI
@@ -15,6 +17,32 @@ let terminalEverStarted = false;
 
 const STD_INPUT_HANDLE = -10;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+
+type BunFfiModule = {
+	dlopen: (
+		filename: string,
+		symbols: Record<string, { args: unknown[]; returns: unknown }>,
+	) => {
+		symbols: Record<string, (...args: unknown[]) => unknown>;
+		close(): void;
+	};
+	FFIType: {
+		i32: unknown;
+		ptr: unknown;
+		bool: unknown;
+		u32: unknown;
+	};
+	ptr(value: Uint32Array): unknown;
+};
+
+function loadBunFfi(): BunFfiModule | null {
+	try {
+		return require("bun:ffi") as BunFfiModule;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Emergency terminal restore - call this from signal/crash handlers
  * Resets terminal state without requiring access to the ProcessTerminal instance
@@ -196,6 +224,9 @@ export class ProcessTerminal implements Terminal {
 		if (process.platform !== "win32") return;
 		this.#restoreWindowsVTInput();
 		try {
+			const ffi = loadBunFfi();
+			if (!ffi) return;
+			const { dlopen, FFIType, ptr } = ffi;
 			const kernel32 = dlopen("kernel32.dll", {
 				GetStdHandle: { args: [FFIType.i32], returns: FFIType.ptr },
 				GetConsoleMode: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },

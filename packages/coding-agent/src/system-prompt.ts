@@ -6,8 +6,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import {
+	$env,
+	getGpuCachePath,
+	getProjectDir,
+	hasFsCode,
+	isEnoent,
+	logger,
+	sleep,
+	spawnProcessSync,
+} from "@oh-my-pi/pi-utils";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { renderPromptTemplate } from "./config/prompt-templates";
@@ -83,6 +91,18 @@ function parseWmicTable(output: string, header: string): string | null {
 		.filter(Boolean);
 	const filtered = lines.filter(line => line.toLowerCase() !== header.toLowerCase());
 	return filtered[0] ?? null;
+}
+
+function runCommand(command: string, args: readonly string[]): string | null {
+	try {
+		const result = spawnProcessSync(command, args, { stdio: "pipe" });
+		if (result.error || result.status !== 0 || !result.stdout) {
+			return null;
+		}
+		return result.stdout.toString("utf8");
+	} catch {
+		return null;
+	}
 }
 
 const AGENTS_MD_MIN_DEPTH = 1;
@@ -178,17 +198,11 @@ async function buildAgentsMdSearch(cwd: string): Promise<AgentsMdSearch> {
 async function getGpuModel(): Promise<string | null> {
 	switch (process.platform) {
 		case "win32": {
-			const output = await $`wmic path win32_VideoController get name`
-				.quiet()
-				.text()
-				.catch(() => null);
+			const output = runCommand("wmic", ["path", "win32_VideoController", "get", "name"]);
 			return output ? parseWmicTable(output, "Name") : null;
 		}
 		case "linux": {
-			const output = await $`lspci`
-				.quiet()
-				.text()
-				.catch(() => null);
+			const output = runCommand("lspci", []);
 			if (!output) return null;
 			const gpus: Array<{ name: string; priority: number }> = [];
 			for (const line of output.split("\n")) {
@@ -226,15 +240,15 @@ async function getGpuModel(): Promise<string | null> {
 }
 
 function getTerminalName(): string | undefined {
-	const termProgram = Bun.env.TERM_PROGRAM;
-	const termProgramVersion = Bun.env.TERM_PROGRAM_VERSION;
+	const termProgram = $env.TERM_PROGRAM;
+	const termProgramVersion = $env.TERM_PROGRAM_VERSION;
 	if (termProgram) {
 		return termProgramVersion ? `${termProgram} ${termProgramVersion}` : termProgram;
 	}
 
-	if (Bun.env.WT_SESSION) return "Windows Terminal";
+	if ($env.WT_SESSION) return "Windows Terminal";
 
-	const term = firstNonEmpty(Bun.env.TERM, Bun.env.COLORTERM, Bun.env.TERMINAL_EMULATOR);
+	const term = firstNonEmpty($env.TERM, $env.COLORTERM, $env.TERMINAL_EMULATOR);
 	return term ?? undefined;
 }
 
@@ -250,8 +264,8 @@ function getSystemInfoCachePath(): string {
 async function loadGpuCache(): Promise<GpuCache | null> {
 	try {
 		const cachePath = getSystemInfoCachePath();
-		const content = await Bun.file(cachePath).json();
-		return content as GpuCache;
+		const content = await fs.promises.readFile(cachePath, "utf8");
+		return JSON.parse(content) as GpuCache;
 	} catch {
 		return null;
 	}
@@ -260,7 +274,8 @@ async function loadGpuCache(): Promise<GpuCache | null> {
 async function saveGpuCache(info: GpuCache): Promise<void> {
 	try {
 		const cachePath = getSystemInfoCachePath();
-		await Bun.write(cachePath, JSON.stringify(info, null, "\t"));
+		await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+		await fs.promises.writeFile(cachePath, JSON.stringify(info, null, "\t"));
 	} catch {
 		// Silently ignore cache write failures
 	}
@@ -297,7 +312,7 @@ export async function resolvePromptInput(input: string | undefined, description:
 	}
 
 	try {
-		return await Bun.file(input).text();
+		return await fs.promises.readFile(input, "utf8");
 	} catch (error) {
 		if (!hasFsCode(error, "ENAMETOOLONG") && !isEnoent(error)) {
 			logger.warn(`Could not read ${description} file`, { path: input, error: String(error) });
@@ -504,7 +519,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		prepPromise
 			.then(value => ({ type: "ready" as const, value }))
 			.catch(error => ({ type: "error" as const, error })),
-		Bun.sleep(SYSTEM_PROMPT_PREP_TIMEOUT_MS).then(() => ({ type: "timeout" as const })),
+		sleep(SYSTEM_PROMPT_PREP_TIMEOUT_MS).then(() => ({ type: "timeout" as const })),
 	]);
 
 	let resolvedCustomPrompt: string | undefined;

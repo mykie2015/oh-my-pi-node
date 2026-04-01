@@ -1,4 +1,5 @@
 import { type AsciiRenderOptions, renderMermaidASCII } from "beautiful-mermaid";
+import { hashValue64BigInt } from "./runtime/hash";
 
 export type { AsciiRenderOptions as MermaidAsciiRenderOptions };
 
@@ -23,7 +24,7 @@ export function extractMermaidBlocks(markdown: string): { source: string; hash: 
 
 	for (let match = regex.exec(markdown); match !== null; match = regex.exec(markdown)) {
 		const source = match[1].trim();
-		const hash = Bun.hash.xxHash64(source);
+		const hash = hashValue64BigInt(source);
 		blocks.push({ source, hash });
 	}
 

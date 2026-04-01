@@ -9,7 +9,7 @@ import { getAgentDir, getConfigRootDir } from "./dirs";
  * Allows values to be quoted with single or double quotes.
  * Returns an object of key-value pairs.
  */
-function parseEnvFile(filePath: string): Record<string, string> {
+export function parseEnvFile(filePath: string): Record<string, string> {
 	const result: Record<string, string> = {};
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
@@ -45,18 +45,22 @@ function parseEnvFile(filePath: string): Record<string, string> {
 	return result;
 }
 
-// Eagerly parse the user's $HOME/.env and the current project's .env (from cwd)
-const homeEnv = parseEnvFile(path.join(os.homedir(), ".env"));
-const piEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
-const agentEnv = parseEnvFile(path.join(getAgentDir(), ".env"));
-const projectEnv = parseEnvFile(path.join(process.cwd(), ".env"));
-
-for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
-	for (const [key, value] of Object.entries(file)) {
-		if (!Bun.env[key]) {
-			Bun.env[key] = value;
+export function loadEnvIntoProcess(filePath: string): void {
+	const parsed = parseEnvFile(filePath);
+	for (const [key, value] of Object.entries(parsed)) {
+		if (!process.env[key]) {
+			process.env[key] = value;
 		}
 	}
+}
+
+for (const filePath of [
+	path.join(process.cwd(), ".env"),
+	path.join(getAgentDir(), ".env"),
+	path.join(getConfigRootDir(), ".env"),
+	path.join(os.homedir(), ".env"),
+]) {
+	loadEnvIntoProcess(filePath);
 }
 
 /**
@@ -66,7 +70,7 @@ for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
  * before using environment variables. This ensures that .env files have been loaded and
  * overrides (project, home) have been applied, so $env always reflects the correct values.
  */
-export const $env: Record<string, string> = Bun.env as Record<string, string>;
+export const $env: Record<string, string> = process.env as Record<string, string>;
 
 /**
  * Resolve the first environment variable value from the given keys.
@@ -75,7 +79,7 @@ export const $env: Record<string, string> = Bun.env as Record<string, string>;
  */
 export function $pickenv(...keys: string[]): string | undefined {
 	for (const key of keys) {
-		const value = Bun.env[key]?.trim();
+		const value = process.env[key]?.trim();
 		if (value) {
 			return value;
 		}

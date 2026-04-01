@@ -1,5 +1,5 @@
 import { logger, truncate } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { parse as parseYaml } from "yaml";
 
 function stripHtmlComments(content: string): string {
 	return content.replace(/<!--[\s\S]*?-->/g, "");
@@ -90,7 +90,7 @@ export function parseFrontmatter(
 
 	try {
 		// Replace tabs with spaces for YAML compatibility, use failsafe mode for robustness
-		const loaded = YAML.parse(metadata.replaceAll("\t", "  ")) as Record<string, unknown> | null;
+		const loaded = parseYaml(metadata.replaceAll("\t", "  ")) as Record<string, unknown> | null;
 		return { frontmatter: normalizeKeys({ ...frontmatter, ...loaded }), body };
 	} catch (error) {
 		const err = new FrontmatterError(

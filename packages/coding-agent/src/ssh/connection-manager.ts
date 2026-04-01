@@ -1,7 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getRemoteHostDir, getSshControlDir, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import {
+	getRemoteHostDir,
+	getSshControlDir,
+	isEnoent,
+	logger,
+	postmortem,
+	spawnProcessSync,
+	whichSync,
+} from "@oh-my-pi/pi-utils";
 import { buildSshTarget, sanitizeHostName } from "./utils";
 
 export interface SSHConnectionTarget {
@@ -92,21 +99,24 @@ function buildCommonArgs(host: SSHConnectionTarget): string[] {
 }
 
 async function runSshSync(args: string[]): Promise<{ exitCode: number | null; stderr: string }> {
-	const result = await $`ssh ${args}`.quiet().nothrow();
-	return { exitCode: result.exitCode, stderr: result.stderr.toString().trim() };
+	const result = spawnProcessSync("ssh", args, { stdio: "pipe" });
+	return {
+		exitCode: result.error ? null : (result.status ?? null),
+		stderr: result.stderr?.toString("utf8").trim() ?? result.error?.message ?? "",
+	};
 }
 
 async function runSshCaptureSync(args: string[]): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
-	const result = await $`ssh ${args}`.quiet().nothrow();
+	const result = spawnProcessSync("ssh", args, { stdio: "pipe" });
 	return {
-		exitCode: result.exitCode,
-		stdout: result.stdout.toString().trim(),
-		stderr: result.stderr.toString().trim(),
+		exitCode: result.error ? null : (result.status ?? null),
+		stdout: result.stdout?.toString("utf8").trim() ?? "",
+		stderr: result.stderr?.toString("utf8").trim() ?? result.error?.message ?? "",
 	};
 }
 
 function ensureSshBinary(): void {
-	if (!Bun.which("ssh")) {
+	if (!whichSync("ssh")) {
 		throw new Error("ssh binary not found on PATH");
 	}
 }
@@ -226,7 +236,8 @@ async function persistHostInfo(host: SSHConnectionTarget, info: SSHHostInfo): Pr
 		const path = getHostInfoPath(host.name);
 		const payload = { ...info, version: HOST_INFO_VERSION };
 		hostInfoCache.set(host.name, payload);
-		await Bun.write(path, JSON.stringify(payload, null, 2), { createPath: true });
+		await fs.promises.mkdir(path.dirname(path), { recursive: true });
+		await fs.promises.writeFile(path, JSON.stringify(payload, null, 2));
 	} catch (err) {
 		logger.warn("Failed to persist SSH host info", { host: host.name, error: String(err) });
 	}

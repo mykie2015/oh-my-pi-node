@@ -1,4 +1,5 @@
 import { createAbortableStream } from "./abortable";
+import { readJsonlChunk } from "./runtime/jsonl";
 
 const LF = 0x0a;
 type JsonlChunkResult = {
@@ -12,12 +13,12 @@ function parseJsonlChunkCompat(input: Uint8Array, beg?: number, end?: number): J
 function parseJsonlChunkCompat(input: string): JsonlChunkResult;
 function parseJsonlChunkCompat(input: Uint8Array | string, beg?: number, end?: number): JsonlChunkResult {
 	if (typeof input === "string") {
-		const { values, error, read, done } = Bun.JSONL.parseChunk(input);
+		const { values, error, read, done } = readJsonlChunk(input);
 		return { values, error, read, done };
 	}
 	const start = beg ?? 0;
 	const stop = end ?? input.length;
-	const { values, error, read, done } = Bun.JSONL.parseChunk(input, start, stop);
+	const { values, error, read, done } = readJsonlChunk(input, start, stop);
 	return { values, error, read, done };
 }
 
@@ -281,7 +282,7 @@ export async function* readSseJson<T>(stream: ReadableStream<Uint8Array>, signal
 /**
  * Parse a complete JSONL string, skipping malformed lines instead of throwing.
  *
- * Uses `Bun.JSONL.parseChunk` internally. On parse errors, the malformed
+ * Uses the shared JSONL chunk parser internally. On parse errors, the malformed
  * region is skipped up to the next newline and parsing continues.
  *
  * @example

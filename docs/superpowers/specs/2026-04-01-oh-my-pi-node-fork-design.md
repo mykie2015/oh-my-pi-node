@@ -2,6 +2,8 @@
 
 Date: 2026-04-01
 
+Status snapshot: [`docs/node-pnpm-migration-status.md`](../../node-pnpm-migration-status.md)
+
 ## Goal
 
 Create a standalone fork of `can1357/oh-my-pi` in this workspace that:

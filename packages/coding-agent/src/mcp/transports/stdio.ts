@@ -5,8 +5,9 @@
  * Messages are newline-delimited JSON.
  */
 
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { Readable } from "node:stream";
 import { getProjectDir, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
-import { type Subprocess, spawn } from "bun";
 import type {
 	JsonRpcError,
 	JsonRpcMessage,
@@ -23,7 +24,7 @@ import { toJsonRpcError } from "../../mcp/types";
  * Spawns a subprocess and communicates via stdin/stdout.
  */
 export class StdioTransport implements MCPTransport {
-	#process: Subprocess<"pipe", "pipe", "pipe"> | null = null;
+	#process: ChildProcessWithoutNullStreams | null = null;
 	#pendingRequests = new Map<
 		string | number,
 		{
@@ -53,17 +54,14 @@ export class StdioTransport implements MCPTransport {
 
 		const args = this.config.args ?? [];
 		const env = {
-			...Bun.env,
+			...process.env,
 			...this.config.env,
 		};
 
-		this.#process = spawn({
-			cmd: [this.config.command, ...args],
+		this.#process = spawn(this.config.command, args, {
 			cwd: this.config.cwd ?? getProjectDir(),
 			env,
-			stdin: "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
+			stdio: ["pipe", "pipe", "pipe"],
 		});
 
 		this.#connected = true;
@@ -78,7 +76,8 @@ export class StdioTransport implements MCPTransport {
 	async #startReadLoop(): Promise<void> {
 		if (!this.#process?.stdout) return;
 		try {
-			for await (const line of readJsonl(this.#process.stdout)) {
+			const stdout = Readable.toWeb(this.#process.stdout) as ReadableStream<Uint8Array>;
+			for await (const line of readJsonl(stdout)) {
 				if (!this.#connected) break;
 				try {
 					this.#handleMessage(line as JsonRpcMessage);
@@ -98,15 +97,10 @@ export class StdioTransport implements MCPTransport {
 	async #startStderrLoop(): Promise<void> {
 		if (!this.#process?.stderr) return;
 
-		const reader = this.#process.stderr.getReader();
-		const decoder = new TextDecoder();
-
 		try {
-			while (this.#connected) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				// Log stderr but don't treat as error - servers use it for logging
-				const text = decoder.decode(value, { stream: true });
+			for await (const chunk of this.#process.stderr) {
+				if (!this.#connected) break;
+				const text = chunk.toString("utf8");
 				if (text.trim()) {
 					// Could expose via onStderr callback if needed
 					// For now, silent - MCP spec says clients MAY capture/ignore
@@ -114,8 +108,6 @@ export class StdioTransport implements MCPTransport {
 			}
 		} catch {
 			// Ignore stderr read errors
-		} finally {
-			reader.releaseLock();
 		}
 	}
 
@@ -175,7 +167,6 @@ export class StdioTransport implements MCPTransport {
 			? { jsonrpc: "2.0" as const, id, error }
 			: { jsonrpc: "2.0" as const, id, result: result ?? {} };
 		this.#process.stdin.write(`${JSON.stringify(response)}\n`);
-		this.#process.stdin.flush();
 	}
 
 	#handleClose(): void {
@@ -261,9 +252,7 @@ export class StdioTransport implements MCPTransport {
 
 		const message = `${JSON.stringify(request)}\n`;
 		try {
-			// Bun's FileSink has write() method directly
 			this.#process.stdin.write(message);
-			this.#process.stdin.flush();
 		} catch (error: unknown) {
 			cleanup();
 			reject(error instanceof Error ? error : new Error(String(error)));
@@ -284,9 +273,7 @@ export class StdioTransport implements MCPTransport {
 		};
 
 		const message = `${JSON.stringify(notification)}\n`;
-		// Bun's FileSink has write() method directly
 		this.#process.stdin.write(message);
-		this.#process.stdin.flush();
 	}
 
 	async close(): Promise<void> {

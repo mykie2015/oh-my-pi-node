@@ -1,7 +1,9 @@
 import { defineWorkspace } from "vitest/config";
+import { vitestTextAssetPlugin } from "./scripts/vitest-text-assets";
 
 export default defineWorkspace([
 	{
+		plugins: [vitestTextAssetPlugin()],
 		test: {
 			name: "agent",
 			root: "./packages/agent",
@@ -10,6 +12,7 @@ export default defineWorkspace([
 		},
 	},
 	{
+		plugins: [vitestTextAssetPlugin()],
 		test: {
 			name: "ai",
 			root: "./packages/ai",
@@ -18,6 +21,7 @@ export default defineWorkspace([
 		},
 	},
 	{
+		plugins: [vitestTextAssetPlugin()],
 		test: {
 			name: "coding-agent",
 			root: "./packages/coding-agent",
@@ -26,6 +30,7 @@ export default defineWorkspace([
 		},
 	},
 	{
+		plugins: [vitestTextAssetPlugin()],
 		test: {
 			name: "natives",
 			root: "./packages/natives",
@@ -34,6 +39,7 @@ export default defineWorkspace([
 		},
 	},
 	{
+		plugins: [vitestTextAssetPlugin()],
 		test: {
 			name: "react-edit-benchmark",
 			root: "./packages/react-edit-benchmark",
@@ -42,6 +48,7 @@ export default defineWorkspace([
 		},
 	},
 	{
+		plugins: [vitestTextAssetPlugin()],
 		test: {
 			name: "tui",
 			root: "./packages/tui",
@@ -50,6 +57,7 @@ export default defineWorkspace([
 		},
 	},
 	{
+		plugins: [vitestTextAssetPlugin()],
 		test: {
 			name: "utils",
 			root: "./packages/utils",

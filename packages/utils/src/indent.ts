@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDir } from "./dirs";
+import { matchesGlob } from "./runtime/glob";
 
 const DEFAULT_TAB_WIDTH = 3;
 const MIN_TAB_WIDTH = 1;
@@ -120,11 +121,9 @@ function matchesEditorConfigPattern(pattern: string, relativePath: string): bool
 	}
 
 	for (const candidate of candidates) {
-		try {
-			if (new Bun.Glob(candidate).match(relativePath)) {
-				return true;
-			}
-		} catch {}
+		if (matchesGlob(candidate, relativePath)) {
+			return true;
+		}
 	}
 
 	return false;

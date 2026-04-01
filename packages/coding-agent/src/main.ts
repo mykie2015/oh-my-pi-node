@@ -11,37 +11,32 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { $env, getConfigDirName, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	getAgentDbPath,
+	getConfigDirName,
+	getProjectDir,
+	logger,
+	postmortem,
+	setProjectDir,
+	VERSION,
+} from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import semverGt from "semver/functions/gt";
 import { invalidate as invalidateFsCache } from "./capability/fs";
 import type { Args } from "./cli/args";
-import { processFileArguments } from "./cli/file-processor";
-import { buildInitialMessage } from "./cli/initial-message";
 import { listModels } from "./cli/list-models";
-import { selectSession } from "./cli/session-picker";
 import { findConfigFile } from "./config";
 import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
 import { Settings, settings } from "./config/settings";
-import { initializeWithSettings } from "./discovery";
-import { clearClaudePluginRootsCache, injectPluginDirRoots, preloadPluginRoots } from "./discovery/helpers";
-import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
-import {
-	getInstalledPluginsRegistryPath,
-	getMarketplacesCacheDir,
-	getMarketplacesRegistryPath,
-	getPluginsCacheDir,
-	MarketplaceManager,
-} from "./extensibility/plugins/marketplace";
 import type { MCPManager } from "./mcp";
-import { InteractiveMode, runAcpMode, runPrintMode, runRpcMode } from "./modes";
-import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
-import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "./sdk";
+import type { CreateAgentSessionOptions } from "./sdk";
+import { AuthStorage } from "./session/auth-storage";
 import type { AgentSession } from "./session/agent-session";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
-import { resolvePromptInput } from "./system-prompt";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
@@ -55,7 +50,7 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		const data = (await response.json()) as { version?: string };
 		const latestVersion = data.version;
 
-		if (latestVersion && Bun.semver.order(latestVersion, currentVersion) > 0) {
+		if (latestVersion && semverGt(latestVersion, currentVersion)) {
 			return latestVersion;
 		}
 
@@ -68,7 +63,11 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 async function readPipedInput(): Promise<string | undefined> {
 	if (process.stdin.isTTY !== false) return undefined;
 	try {
-		const text = await Bun.stdin.text();
+		const chunks: Buffer[] = [];
+		for await (const chunk of process.stdin) {
+			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+		}
+		const text = Buffer.concat(chunks).toString("utf8");
 		if (text.trim().length === 0) return undefined;
 		return text;
 	} catch {
@@ -81,8 +80,14 @@ export interface InteractiveModeNotify {
 	message: string;
 }
 
+type SubmitMode = {
+	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
+	finishPendingSubmission(input: SubmittedUserInput): void;
+	showError(message: string): void;
+};
+
 export async function submitInteractiveInput(
-	mode: Pick<InteractiveMode, "markPendingSubmissionStarted" | "finishPendingSubmission" | "showError">,
+	mode: SubmitMode,
 	session: Pick<AgentSession, "prompt">,
 	input: SubmittedUserInput,
 ): Promise<void> {
@@ -117,6 +122,7 @@ async function runInteractiveMode(
 	initialMessage?: string,
 	initialImages?: ImageContent[],
 ): Promise<void> {
+	const { InteractiveMode } = await import("./modes");
 	const mode = new InteractiveMode(session, version, changelogMarkdown, setExtensionUIContext, lspServers, mcpManager);
 
 	await mode.init();
@@ -217,6 +223,13 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 	}
 
 	return undefined;
+}
+
+async function discoverAuthStorage(agentDir?: string): Promise<AuthStorage> {
+	const dbPath = getAgentDbPath(agentDir);
+	const storage = await AuthStorage.create(dbPath);
+	await storage.reload();
+	return storage;
 }
 
 async function createSessionManager(parsed: Args, cwd: string): Promise<SessionManager | undefined> {
@@ -365,6 +378,7 @@ async function buildSessionOptions(
 
 	// Auto-discover SYSTEM.md if no CLI system prompt provided
 	const systemPromptSource = parsed.systemPrompt ?? discoverSystemPromptFile();
+	const { resolvePromptInput } = await import("./system-prompt");
 	const resolvedSystemPrompt = await resolvePromptInput(systemPromptSource, "system prompt");
 	const appendPromptSource = parsed.appendSystemPrompt ?? discoverAppendSystemPromptFile();
 	const resolvedAppendPrompt = await resolvePromptInput(appendPromptSource, "append system prompt");
@@ -514,10 +528,6 @@ async function buildSessionOptions(
 export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<void> {
 	logger.startTiming();
 
-	// Initialize theme early with defaults (CLI commands need symbols)
-	// Will be re-initialized with user preferences later
-	await logger.timeAsync("initTheme:initial", () => initTheme());
-
 	const parsedArgs = parsed;
 	await logger.timeAsync("maybeAutoChdir", () => maybeAutoChdir(parsedArgs));
 
@@ -543,7 +553,14 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.exit(0);
 	}
 
+	const { initTheme, stopThemeWatcher } = await import("./modes/theme/theme");
+
+	// Initialize theme early with defaults (CLI commands need symbols)
+	// Will be re-initialized with user preferences later
+	await logger.timeAsync("initTheme:initial", () => initTheme());
+
 	if (parsedArgs.export) {
+		const { exportFromFile } = await import("./export/html");
 		let result: string;
 		try {
 			const outputPath = parsedArgs.messages.length > 0 ? parsedArgs.messages[0] : undefined;
@@ -565,8 +582,12 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const cwd = getProjectDir();
 	await logger.timeAsync("settings:init", () => Settings.init({ cwd }));
 	if (parsedArgs.noPty) {
-		Bun.env.PI_NO_PTY = "1";
+		process.env.PI_NO_PTY = "1";
 	}
+	const [{ processFileArguments }, { buildInitialMessage }] = await Promise.all([
+		import("./cli/file-processor"),
+		import("./cli/initial-message"),
+	]);
 	const { pipedInput, fileText, fileImages } = await logger.timeAsync("prepareInitialMessage", async () => {
 		const pipedInput = await readPipedInput();
 		if (parsedArgs.fileArgs.length === 0) {
@@ -593,6 +614,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const mode = parsedArgs.mode || "text";
 
 	// Initialize discovery system with settings for provider persistence
+	const { initializeWithSettings } = await import("./discovery");
 	logger.time("initializeWithSettings", () => initializeWithSettings(settings));
 	modelRegistry.refreshInBackground();
 
@@ -634,6 +656,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	// Handle --resume (no value): show session picker
 	if (parsedArgs.resume === true && !parsedArgs.fork) {
+		const { selectSession } = await import("./cli/session-picker");
 		const sessions = await logger.timeAsync("SessionManager.list", () =>
 			SessionManager.list(cwd, parsedArgs.sessionDir),
 		);
@@ -651,6 +674,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	// Wire --plugin-dir and preload plugin roots for sync consumers (LSP config)
 	const home = os.homedir();
+	const { clearClaudePluginRootsCache, injectPluginDirRoots, preloadPluginRoots } = await import("./discovery/helpers");
 	if (parsedArgs.pluginDirs && parsedArgs.pluginDirs.length > 0) {
 		await logger.timeAsync("injectPluginDirRoots", () => injectPluginDirRoots(home, parsedArgs.pluginDirs!));
 	} else {
@@ -660,6 +684,13 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	// Background marketplace auto-update — never blocks startup.
 	const autoUpdate = settings.get("marketplace.autoUpdate");
 	if (autoUpdate !== "off") {
+		const {
+			getInstalledPluginsRegistryPath,
+			getMarketplacesCacheDir,
+			getMarketplacesRegistryPath,
+			getPluginsCacheDir,
+			MarketplaceManager,
+		} = await import("./extensibility/plugins/marketplace");
 		void (async () => {
 			try {
 				const mgr = new MarketplaceManager({
@@ -709,6 +740,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		}
 	}
 
+	const { createAgentSession } = await import("./sdk");
 	const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await logger.timeAsync(
 		"createAgentSession",
 		() => createAgentSession(sessionOptions),
@@ -764,8 +796,10 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	}
 
 	if (mode === "rpc") {
+		const { runRpcMode } = await import("./modes");
 		await runRpcMode(session);
 	} else if (mode === "acp") {
+		const { runAcpMode } = await import("./modes");
 		await runAcpMode(session);
 	} else if (isInteractive) {
 		const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
@@ -801,6 +835,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			initialImages,
 		);
 	} else {
+		const { runPrintMode } = await import("./modes");
 		await runPrintMode(session, {
 			mode,
 			messages: parsedArgs.messages,

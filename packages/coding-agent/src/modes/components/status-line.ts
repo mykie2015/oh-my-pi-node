@@ -1,8 +1,7 @@
 import * as fs from "node:fs";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatCount } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { formatCount, spawnProcessSync } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
@@ -20,6 +19,18 @@ import { getPreset } from "./status-line/presets";
 import { renderSegment, type SegmentContext } from "./status-line/segments";
 import { getSeparator } from "./status-line/separators";
 import { calculateTokensPerSecond } from "./status-line/token-rate";
+
+function runCommand(command: string, args: readonly string[]): string | null {
+	try {
+		const result = spawnProcessSync(command, args, { stdio: "pipe" });
+		if (result.error || result.status !== 0 || !result.stdout) {
+			return null;
+		}
+		return result.stdout.toString("utf8").trim();
+	} catch {
+		return null;
+	}
+}
 
 export interface StatusLineSegmentOptions {
 	model?: { showThinkingLevel?: boolean };
@@ -181,20 +192,20 @@ export class StatusLineComponent implements Component {
 	#isDefaultBranch(branch: string): boolean {
 		if (this.#defaultBranch === undefined) {
 			// Kick off async resolution, use hardcoded fallback until it resolves
-			this.#defaultBranch = "main";
-			(async () => {
-				// Try origin/HEAD first, fall back to upstream/HEAD
-				const origin = await $`git rev-parse --abbrev-ref origin/HEAD`.quiet().nothrow();
-				if (origin.exitCode === 0) {
-					this.#defaultBranch = parseDefaultBranch(origin.stdout.toString().trim());
-					return;
-				}
-				const upstream = await $`git rev-parse --abbrev-ref upstream/HEAD`.quiet().nothrow();
-				if (upstream.exitCode === 0) {
-					this.#defaultBranch = parseDefaultBranch(upstream.stdout.toString().trim());
-				}
-			})();
-		}
+				this.#defaultBranch = "main";
+				(async () => {
+					// Try origin/HEAD first, fall back to upstream/HEAD
+					const origin = runCommand("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
+					if (origin) {
+						this.#defaultBranch = parseDefaultBranch(origin);
+						return;
+					}
+					const upstream = runCommand("git", ["rev-parse", "--abbrev-ref", "upstream/HEAD"]);
+					if (upstream) {
+						this.#defaultBranch = parseDefaultBranch(upstream);
+					}
+				})();
+			}
 		return branch === this.#defaultBranch;
 	}
 
@@ -205,20 +216,17 @@ export class StatusLineComponent implements Component {
 
 		this.#gitStatusInFlight = true;
 
-		// Fire async fetch, return cached value
-		(async () => {
-			try {
-				const result = await $`git --no-optional-locks status --porcelain`.quiet().nothrow();
+			// Fire async fetch, return cached value
+			(async () => {
+				try {
+					const output = runCommand("git", ["--no-optional-locks", "status", "--porcelain"]);
+					if (output === null) {
+						this.#cachedGitStatus = null;
+						return;
+					}
 
-				if (result.exitCode !== 0) {
-					this.#cachedGitStatus = null;
-					return;
-				}
-
-				const output = result.stdout.toString();
-
-				let staged = 0;
-				let unstaged = 0;
+					let staged = 0;
+					let unstaged = 0;
 				let untracked = 0;
 
 				for (const line of output.split("\n")) {
@@ -271,7 +279,7 @@ export class StatusLineComponent implements Component {
 		const lookupContext = currentContext;
 
 		// Fire async lookup, keep stale value visible until resolved
-		(async () => {
+			(async () => {
 			// Helper: only write cache if branch/repo context hasn't changed since launch
 			const setCachedPr = (value: { number: number; url: string } | null) => {
 				const latestBranch = this.#getCurrentBranch();
@@ -282,18 +290,18 @@ export class StatusLineComponent implements Component {
 					this.#cachedPr = value;
 					this.#cachedPrContext = lookupContext;
 				}
-			};
-			try {
-				// Requires `gh repo set-default` to be configured; fails gracefully if not
-				const result = await $`gh pr view --json number,url`.quiet().nothrow();
-				if (result.exitCode !== 0) {
-					setCachedPr(null);
-					return;
-				}
-				const pr = JSON.parse(result.stdout.toString()) as { number: number; url: string };
-				if (typeof pr.number === "number") {
-					setCachedPr({ number: pr.number, url: pr.url });
-				} else {
+				};
+				try {
+					// Requires `gh repo set-default` to be configured; fails gracefully if not
+					const output = runCommand("gh", ["pr", "view", "--json", "number,url"]);
+					if (output === null) {
+						setCachedPr(null);
+						return;
+					}
+					const pr = JSON.parse(output) as { number: number; url: string };
+					if (typeof pr.number === "number") {
+						setCachedPr({ number: pr.number, url: pr.url });
+					} else {
 					setCachedPr(null);
 				}
 			} catch {

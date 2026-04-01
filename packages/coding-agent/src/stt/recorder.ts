@@ -1,23 +1,74 @@
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger, Snowflake } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { logger, sleep, Snowflake, spawnProcessSync, whichSync } from "@oh-my-pi/pi-utils";
 
 export interface RecordingHandle {
 	stop(): Promise<void>;
 }
 
 const isWindows = process.platform === "win32";
+type RecordingProcess = ChildProcessWithoutNullStreams & { getStderrText(): string };
+
+function spawnRecordingProcess(command: string, args: readonly string[]): RecordingProcess {
+	const proc = spawn(command, [...args], {
+		stdio: ["pipe", "pipe", "pipe"],
+	}) as ChildProcessWithoutNullStreams;
+	let stderrText = "";
+	proc.stderr.setEncoding("utf8");
+	proc.stderr.on("data", chunk => {
+		stderrText += chunk;
+	});
+	return Object.assign(proc, {
+		getStderrText: () => stderrText,
+	});
+}
+
+async function waitForExit(proc: ChildProcessWithoutNullStreams): Promise<number | null> {
+	if (proc.exitCode !== null) return proc.exitCode;
+	return await new Promise(resolve => {
+		proc.once("exit", code => resolve(code));
+	});
+}
+
+async function waitForOutput(proc: RecordingProcess, expected: string, timeoutMs: number): Promise<string> {
+	proc.stdout.setEncoding("utf8");
+	let output = "";
+	return await new Promise(resolve => {
+		const onData = (chunk: string | Buffer) => {
+			output += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+			if (output.includes(expected)) {
+				cleanup();
+				resolve(output);
+			}
+		};
+		const onExit = () => {
+			cleanup();
+			resolve(output);
+		};
+		const timer = setTimeout(() => {
+			cleanup();
+			resolve(output);
+		}, timeoutMs);
+		const cleanup = () => {
+			clearTimeout(timer);
+			proc.stdout.off("data", onData);
+			proc.off("exit", onExit);
+		};
+		proc.stdout.on("data", onData);
+		proc.once("exit", onExit);
+	});
+}
 
 /**
  * Returns available recording tools in priority order.
  */
 export function detectRecordingTools(): string[] {
 	const tools: string[] = [];
-	if (Bun.which("sox")) tools.push("sox");
-	if (Bun.which("ffmpeg")) tools.push("ffmpeg");
-	if (!isWindows && Bun.which("arecord")) tools.push("arecord");
+	if (whichSync("sox")) tools.push("sox");
+	if (whichSync("ffmpeg")) tools.push("ffmpeg");
+	if (!isWindows && whichSync("arecord")) tools.push("arecord");
 	if (isWindows) tools.push("powershell");
 	return tools;
 }
@@ -25,8 +76,10 @@ export function detectRecordingTools(): string[] {
 // ── ffmpeg dshow device detection ──────────────────────────────────
 
 async function detectWindowsAudioDevice(): Promise<string> {
-	const result = await $`ffmpeg -f dshow -list_devices true -i dummy`.quiet().nothrow();
-	const output = result.stderr.toString();
+	const result = spawnProcessSync("ffmpeg", ["-f", "dshow", "-list_devices", "true", "-i", "dummy"], {
+		stdio: "pipe",
+	});
+	const output = result.stderr?.toString("utf8") ?? result.error?.message ?? "";
 	const audioDevices: string[] = [];
 	const re = /"([^"]+)"\s*\(audio\)/gi;
 	for (const match of output.matchAll(re)) {
@@ -45,25 +98,21 @@ async function startSoxRecording(outputPath: string): Promise<RecordingHandle> {
 	// On Windows, "-d" (default device) often fails. Use "-t waveaudio 0" for the first input.
 	const inputArgs = isWindows ? ["-t", "waveaudio", "0"] : ["-d"];
 
-	const proc = Bun.spawn(["sox", ...inputArgs, "-r", "16000", "-c", "1", "-b", "16", "-t", "wav", outputPath], {
-		stdout: "pipe",
-		stderr: "ignore",
-	});
+	const proc = spawnRecordingProcess("sox", [...inputArgs, "-r", "16000", "-c", "1", "-b", "16", "-t", "wav", outputPath]);
 	await verifyProcessAlive(proc, "sox");
 	return {
 		async stop() {
 			proc.kill("SIGTERM");
-			await proc.exited;
+			await waitForExit(proc);
 		},
 	};
 }
 
 async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle> {
-	let args: string[];
+	let ffmpegArgs: string[];
 	if (isWindows) {
 		const device = await detectWindowsAudioDevice();
-		args = [
-			"ffmpeg",
+		ffmpegArgs = [
 			"-f",
 			"dshow",
 			"-i",
@@ -78,8 +127,7 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 			outputPath,
 		];
 	} else if (process.platform === "darwin") {
-		args = [
-			"ffmpeg",
+		ffmpegArgs = [
 			"-f",
 			"avfoundation",
 			"-i",
@@ -94,8 +142,7 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 			outputPath,
 		];
 	} else {
-		args = [
-			"ffmpeg",
+		ffmpegArgs = [
 			"-f",
 			"pulse",
 			"-i",
@@ -111,11 +158,7 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 		];
 	}
 
-	const proc = Bun.spawn(args, {
-		stdin: "pipe",
-		stdout: "pipe",
-		stderr: "ignore",
-	});
+	const proc = spawnRecordingProcess("ffmpeg", ffmpegArgs);
 	await verifyProcessAlive(proc, "ffmpeg");
 
 	return {
@@ -127,22 +170,19 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 				// stdin may already be closed
 			}
 			const killTimer = setTimeout(() => proc.kill(), 3000);
-			await proc.exited;
+			await waitForExit(proc);
 			clearTimeout(killTimer);
 		},
 	};
 }
 
 async function startArecordRecording(outputPath: string): Promise<RecordingHandle> {
-	const proc = Bun.spawn(["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", outputPath], {
-		stdout: "pipe",
-		stderr: "ignore",
-	});
+	const proc = spawnRecordingProcess("arecord", ["-f", "S16_LE", "-r", "16000", "-c", "1", outputPath]);
 	await verifyProcessAlive(proc, "arecord");
 	return {
 		async stop() {
 			proc.kill("SIGTERM");
-			await proc.exited;
+			await waitForExit(proc);
 		},
 	};
 }
@@ -215,41 +255,28 @@ if (Test-Path $outPath) {
 async function startPowerShellRecording(outputPath: string): Promise<RecordingHandle> {
 	// Write script to temp file — avoids quoting/escaping issues with -Command
 	const scriptPath = path.join(os.tmpdir(), `omp-stt-record-${Snowflake.next()}.ps1`);
-	await Bun.write(scriptPath, PS_RECORD_SCRIPT);
+	await fs.writeFile(scriptPath, PS_RECORD_SCRIPT, "utf8");
 
-	const proc = Bun.spawn(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, outputPath], {
-		stdin: "pipe",
-		stdout: "pipe",
-		stderr: "ignore",
-	});
+	const proc = spawnRecordingProcess("powershell", [
+		"-NoProfile",
+		"-ExecutionPolicy",
+		"Bypass",
+		"-File",
+		scriptPath,
+		outputPath,
+	]);
 
-	proc.exited.then(() => {
+	waitForExit(proc).then(() => {
 		fs.unlink(scriptPath).catch(() => {});
 	});
 
 	// Wait for "RECORDING" on stdout to confirm it started
-	const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
-	const decoder = new TextDecoder();
-	let output = "";
-	const deadline = Date.now() + 8000; // PowerShell + Add-Type is slow
-
-	while (Date.now() < deadline) {
-		const readPromise = reader.read();
-		const timeoutPromise = Bun.sleep(deadline - Date.now()).then(() => ({ done: true, value: undefined }));
-		const { done, value } = await Promise.race([readPromise, timeoutPromise]);
-		if (done || !value) break;
-		output += decoder.decode(value, { stream: true });
-		if (output.includes("RECORDING")) break;
-	}
-	reader.releaseLock();
+	const output = await waitForOutput(proc, "RECORDING", 8000);
 
 	if (!output.includes("RECORDING")) {
 		proc.kill();
-		await proc.exited;
-		let stderrText = "";
-		if (proc.stderr && typeof proc.stderr !== "number") {
-			stderrText = await new Response(proc.stderr as ReadableStream).text();
-		}
+		await waitForExit(proc);
+		const stderrText = proc.getStderrText();
 		// Clean up temp script
 		fs.unlink(scriptPath).catch(() => {});
 		throw new Error(
@@ -267,7 +294,7 @@ async function startPowerShellRecording(outputPath: string): Promise<RecordingHa
 			}
 			// Give PowerShell time to save the file
 			const killTimer = setTimeout(() => proc.kill(), 8000);
-			await proc.exited;
+			await waitForExit(proc);
 			clearTimeout(killTimer);
 			// Clean up temp script
 			fs.unlink(scriptPath).catch(() => {});
@@ -277,17 +304,12 @@ async function startPowerShellRecording(outputPath: string): Promise<RecordingHa
 
 // ── Health check ───────────────────────────────────────────────────
 
-async function verifyProcessAlive(proc: ReturnType<typeof Bun.spawn>, tool: string): Promise<void> {
-	await Bun.sleep(300);
+async function verifyProcessAlive(proc: RecordingProcess, tool: string): Promise<void> {
+	await sleep(300);
 
-	const exited = await Promise.race([proc.exited.then(code => code), Bun.sleep(0).then(() => "running" as const)]);
-
-	if (exited !== "running") {
-		let stderr = "";
-		if (proc.stderr && typeof proc.stderr !== "number") {
-			stderr = await new Response(proc.stderr as ReadableStream).text();
-		}
-		throw new Error(`${tool} exited immediately (code ${exited}): ${stderr.trim() || "(no output)"}`);
+	if (proc.exitCode !== null) {
+		const stderr = proc.getStderrText().trim();
+		throw new Error(`${tool} exited immediately (code ${proc.exitCode}): ${stderr || "(no output)"}`);
 	}
 }
 

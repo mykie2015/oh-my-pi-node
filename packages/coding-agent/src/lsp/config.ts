@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { parse as parseYaml } from "yaml";
 import { getConfigDirPaths } from "../config";
 import { getPreloadedPluginRoots } from "../discovery/helpers";
 import { BiomeClient } from "./clients/biome-client";
@@ -30,7 +30,7 @@ interface NormalizedConfig {
 function parseConfigContent(content: string, filePath: string): unknown {
 	const extension = path.extname(filePath).toLowerCase();
 	if (extension === ".yaml" || extension === ".yml") {
-		return YAML.parse(content) as unknown;
+		return parseYaml(content) as unknown;
 	}
 	return JSON.parse(content) as unknown;
 }

@@ -5,7 +5,7 @@ import type {
 	ResponseCreateParamsStreaming,
 	ResponseInput,
 } from "openai/resources/responses/responses";
-import { getEnvApiKey } from "../stream";
+import { getEnvApiKey } from "../env-api-key";
 import {
 	type Api,
 	type AssistantMessage,
@@ -32,11 +32,12 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	createFirstEventWatchdog,
+	getOpenAIFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 	markFirstStreamEvent,
 } from "../utils/idle-iterator";
+import { DEFAULT_OPENAI_BASE_URL, resolveOpenAIModelBaseUrl } from "../utils/openai-base-url";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
@@ -179,8 +180,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				? AbortSignal.any([options.signal, requestAbortController.signal])
 				: requestAbortController.signal;
 			const idleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
-			const firstEventWatchdog = createFirstEventWatchdog(getStreamFirstEventTimeoutMs(idleTimeoutMs), () =>
-				requestAbortController.abort(),
+			const firstEventWatchdog = createFirstEventWatchdog(
+				getOpenAIFirstEventTimeoutMs({
+					idleTimeoutMs,
+					baseUrl,
+					provider: model.provider,
+				}),
+				() => requestAbortController.abort(),
 			);
 			options?.onPayload?.(params);
 			rawRequestDump = {
@@ -188,7 +194,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				url: `${baseUrl ?? "https://api.openai.com/v1"}/responses`,
+				url: `${baseUrl ?? DEFAULT_OPENAI_BASE_URL}/responses`,
 				body: params,
 			};
 			const openaiStream = await client.responses.create(params, { signal: requestSignal });
@@ -269,6 +275,9 @@ function createClient(
 	let copilotPremiumRequests: number | undefined;
 
 	let baseUrl = model.baseUrl;
+	if (model.provider === "openai") {
+		baseUrl = resolveOpenAIModelBaseUrl(model.baseUrl);
+	}
 	if (model.provider === "github-copilot") {
 		const hasImages = hasCopilotVisionInput(context.messages);
 		const copilot = buildCopilotDynamicHeaders({
@@ -302,9 +311,10 @@ function buildParams(
 	providerSessionState: OpenAIResponsesProviderSessionState | undefined,
 	resolvedBaseUrl?: string,
 ): { conversationMessages: ResponseInput; params: OpenAIResponsesSamplingParams } {
+	const baseUrl = model.provider === "openai" ? resolveOpenAIModelBaseUrl(model.baseUrl) : model.baseUrl;
 	const strictResponsesPairing =
 		options?.strictResponsesPairing ??
-		(isAzureOpenAIBaseUrl(model.baseUrl ?? "") || model.provider === "github-copilot");
+		(isAzureOpenAIBaseUrl(baseUrl ?? "") || model.provider === "github-copilot");
 	const conversationMessages = convertConversationMessages(
 		model,
 		context,
@@ -328,7 +338,7 @@ function buildParams(
 		input: messages,
 		stream: true,
 		prompt_cache_key: promptCacheKey,
-		prompt_cache_retention: promptCacheKey ? getPromptCacheRetention(model.baseUrl, cacheRetention) : undefined,
+		prompt_cache_retention: promptCacheKey && baseUrl ? getPromptCacheRetention(baseUrl, cacheRetention) : undefined,
 		store: false,
 	};
 

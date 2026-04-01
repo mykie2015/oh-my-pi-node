@@ -1,6 +1,7 @@
 import * as path from "node:path";
-import { Glob } from "bun";
 import { getProjectDir } from "./dirs";
+import { readTextFile } from "./runtime/fs";
+import { matchesGlob, scanGlob } from "./runtime/glob";
 
 export interface GlobPathsOptions {
 	/** Base directory for glob patterns. Defaults to getProjectDir(). */
@@ -107,7 +108,7 @@ export async function loadGitignorePatterns(baseDir: string): Promise<string[]> 
 		const gitignorePath = path.join(current, ".gitignore");
 
 		try {
-			const content = await Bun.file(gitignorePath).text();
+			const content = await readTextFile(gitignorePath);
 			const filePatterns = parseGitignorePatterns(content, current, absoluteBase);
 			patterns.push(...filePatterns);
 		} catch {
@@ -154,15 +155,7 @@ export async function globPaths(patterns: string | string[], options: GlobPathsO
 		signal && timeoutSignal ? AbortSignal.any([signal, timeoutSignal]) : (signal ?? timeoutSignal);
 
 	for (const pattern of patternArray) {
-		const glob = new Glob(pattern);
-		const scanOptions = {
-			cwd: base,
-			dot,
-			onlyFiles,
-			throwErrorOnBrokenSymlink: false,
-		};
-
-		for await (const entry of glob.scan(scanOptions)) {
+		for (const entry of await scanGlob(pattern, base, { dot, onlyFiles })) {
 			if (combinedSignal?.aborted) {
 				const reason = combinedSignal.reason;
 				if (reason instanceof Error) throw reason;
@@ -173,8 +166,7 @@ export async function globPaths(patterns: string | string[], options: GlobPathsO
 			const normalized = entry.replace(/\\/g, "/");
 			let excluded = false;
 			for (const excludePattern of effectiveExclude) {
-				const excludeGlob = new Glob(excludePattern);
-				if (excludeGlob.match(normalized)) {
+				if (matchesGlob(excludePattern, normalized)) {
 					excluded = true;
 					break;
 				}

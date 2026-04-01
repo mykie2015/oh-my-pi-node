@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { isEnoent, logger, readTextFile } from "@oh-my-pi/pi-utils";
+import { parse as parseYaml } from "yaml";
 import type { SecretEntry } from "./obfuscator";
 import { compileSecretRegex } from "./regex";
 
@@ -48,8 +48,8 @@ export function collectEnvSecrets(): SecretEntry[] {
 
 async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {
 	try {
-		const text = await Bun.file(filePath).text();
-		const raw = YAML.parse(text);
+		const text = await readTextFile(filePath);
+		const raw = parseYaml(text);
 		if (!Array.isArray(raw)) {
 			logger.warn("secrets.yml must be a YAML array", { path: filePath });
 			return [];

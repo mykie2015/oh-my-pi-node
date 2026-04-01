@@ -3,8 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
 import { projfsOverlayStart, projfsOverlayStop } from "@oh-my-pi/pi-natives";
-import { getWorktreeDir, isEnoent, logger, Snowflake } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { getWorktreeDir, isEnoent, logger, Snowflake, spawnProcessSync, whichSync } from "@oh-my-pi/pi-utils";
 
 /** Baseline state for a single git repository. */
 export interface RepoBaseline {
@@ -22,16 +21,57 @@ export interface WorktreeBaseline {
 	nested: Array<{ relativePath: string; baseline: RepoBaseline }>;
 }
 
+interface CommandResult {
+	exitCode: number | null;
+	stdout: string;
+	stderr: string;
+}
+
+function runCommand(
+	command: string,
+	args: readonly string[],
+	options?: { cwd?: string; env?: Record<string, string> },
+): CommandResult {
+	const env = options?.env ? { ...process.env, ...options.env } : undefined;
+	const result = spawnProcessSync(command, args, { cwd: options?.cwd, env, stdio: "pipe" });
+	return {
+		exitCode: result.error ? null : (result.status ?? null),
+		stdout: result.stdout?.toString("utf8") ?? "",
+		stderr: result.stderr?.toString("utf8") ?? result.error?.message ?? "",
+	};
+}
+
+function runGit(
+	cwd: string,
+	args: readonly string[],
+	options?: { env?: Record<string, string> },
+): CommandResult {
+	return runCommand("git", args, { cwd, env: options?.env });
+}
+
+function getGitText(
+	cwd: string,
+	args: readonly string[],
+	options?: { env?: Record<string, string>; allowedExitCodes?: readonly number[] },
+): string {
+	const result = runGit(cwd, args, { env: options?.env });
+	const allowedExitCodes = options?.allowedExitCodes ?? [0];
+	if (!allowedExitCodes.includes(result.exitCode ?? -1)) {
+		throw new Error(result.stderr.trim() || `git ${args.join(" ")} failed`);
+	}
+	return result.stdout;
+}
+
 export function getEncodedProjectName(cwd: string): string {
 	return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
 
 export async function getRepoRoot(cwd: string): Promise<string> {
-	const result = await $`git rev-parse --show-toplevel`.cwd(cwd).quiet().nothrow();
+	const result = runGit(cwd, ["rev-parse", "--show-toplevel"]);
 	if (result.exitCode !== 0) {
 		throw new Error("Git repository not found for isolated task execution.");
 	}
-	const repoRoot = result.text().trim();
+	const repoRoot = result.stdout.trim();
 	if (!repoRoot) {
 		throw new Error("Git repository root could not be resolved for isolated task execution.");
 	}
@@ -54,20 +94,19 @@ export async function ensureWorktree(baseCwd: string, id: string): Promise<strin
 	const encodedProject = getEncodedProjectName(repoRoot);
 	const worktreeDir = getWorktreeDir(encodedProject, id);
 	await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
-	await $`git worktree remove -f ${worktreeDir}`.cwd(repoRoot).quiet().nothrow();
+	runGit(repoRoot, ["worktree", "remove", "-f", worktreeDir]);
 	await fs.rm(worktreeDir, { recursive: true, force: true });
-	await $`git worktree add --detach ${worktreeDir} HEAD`.cwd(repoRoot).quiet();
+	const addResult = runGit(repoRoot, ["worktree", "add", "--detach", worktreeDir, "HEAD"]);
+	if (addResult.exitCode !== 0) {
+		throw new Error(addResult.stderr.trim() || "Failed to create task worktree.");
+	}
 	return worktreeDir;
 }
 
 /** Find nested git repositories (non-submodule) under the given root. */
 async function discoverNestedRepos(repoRoot: string): Promise<string[]> {
 	// Get submodule paths so we can exclude them
-	const submoduleRaw = await $`git submodule --quiet foreach --recursive 'echo $sm_path'`
-		.cwd(repoRoot)
-		.quiet()
-		.nothrow()
-		.text();
+	const submoduleRaw = runGit(repoRoot, ["submodule", "--quiet", "foreach", "--recursive", "echo $sm_path"]).stdout;
 	const submodulePaths = new Set(
 		submoduleRaw
 			.split("\n")
@@ -109,10 +148,10 @@ async function discoverNestedRepos(repoRoot: string): Promise<string[]> {
 }
 
 async function captureRepoBaseline(repoRoot: string): Promise<RepoBaseline> {
-	const headCommit = (await $`git rev-parse HEAD`.cwd(repoRoot).quiet().text()).trim();
-	const staged = await $`git diff --cached --binary`.cwd(repoRoot).quiet().text();
-	const unstaged = await $`git diff --binary`.cwd(repoRoot).quiet().text();
-	const untrackedRaw = await $`git ls-files --others --exclude-standard`.cwd(repoRoot).quiet().text();
+	const headCommit = getGitText(repoRoot, ["rev-parse", "HEAD"]).trim();
+	const staged = getGitText(repoRoot, ["diff", "--cached", "--binary"]);
+	const unstaged = getGitText(repoRoot, ["diff", "--binary"]);
+	const untrackedRaw = getGitText(repoRoot, ["ls-files", "--others", "--exclude-standard"]);
 	const untracked = untrackedRaw
 		.split("\n")
 		.map(line => line.trim())
@@ -133,7 +172,7 @@ export async function captureBaseline(repoRoot: string): Promise<WorktreeBaselin
 
 async function writeTempPatchFile(patch: string): Promise<string> {
 	const tempPath = path.join(os.tmpdir(), `omp-task-patch-${Snowflake.next()}.patch`);
-	await Bun.write(tempPath, patch);
+	await fs.writeFile(tempPath, patch, "utf8");
 	return tempPath;
 }
 
@@ -145,12 +184,11 @@ async function applyPatch(
 	if (!patch.trim()) return;
 	const tempPath = await writeTempPatchFile(patch);
 	try {
-		const command = options?.cached ? $`git apply --cached --binary ${tempPath}` : $`git apply --binary ${tempPath}`;
-		let runner = command.cwd(cwd).quiet();
-		if (options?.env) {
-			runner = runner.env(options.env);
+		const args = options?.cached ? ["apply", "--cached", "--binary", tempPath] : ["apply", "--binary", tempPath];
+		const result = runGit(cwd, args, { env: options?.env });
+		if (result.exitCode !== 0) {
+			throw new Error(result.stderr.trim() || `Failed to apply patch in ${cwd}`);
 		}
-		await runner;
 	} finally {
 		await fs.rm(tempPath, { force: true });
 	}
@@ -193,15 +231,13 @@ export async function applyBaseline(worktreeDir: string, baseline: WorktreeBasel
 		// Commit baseline state so captureRepoDeltaPatch can cleanly subtract it.
 		// Without this, `git add -A && git commit` by the task would include
 		// baseline untracked files in the diff-tree output.
-		const hasChanges = (
-			await $`git --no-optional-locks status --porcelain`.cwd(nestedDir).quiet().nothrow().text()
-		).trim();
+		const hasChanges = runGit(nestedDir, ["--no-optional-locks", "status", "--porcelain"]).stdout.trim();
 		if (hasChanges) {
-			await $`git add -A`.cwd(nestedDir).quiet();
-			await $`git commit -m omp-baseline --allow-empty`.cwd(nestedDir).quiet();
+			getGitText(nestedDir, ["add", "-A"]);
+			getGitText(nestedDir, ["commit", "-m", "omp-baseline", "--allow-empty"]);
 			// Update baseline to reflect the committed state — prevents double-apply
 			// in captureRepoDeltaPatch's temp-index path
-			entry.baseline.headCommit = (await $`git rev-parse HEAD`.cwd(nestedDir).quiet().text()).trim();
+			entry.baseline.headCommit = getGitText(nestedDir, ["rev-parse", "HEAD"]).trim();
 			entry.baseline.staged = "";
 			entry.baseline.unstaged = "";
 			entry.baseline.untracked = [];
@@ -213,19 +249,19 @@ async function applyPatchToIndex(cwd: string, patch: string, indexFile: string):
 	if (!patch.trim()) return;
 	const tempPath = await writeTempPatchFile(patch);
 	try {
-		await $`git apply --cached --binary ${tempPath}`
-			.cwd(cwd)
-			.env({
-				GIT_INDEX_FILE: indexFile,
-			})
-			.quiet();
+		const result = runGit(cwd, ["apply", "--cached", "--binary", tempPath], {
+			env: { GIT_INDEX_FILE: indexFile },
+		});
+		if (result.exitCode !== 0) {
+			throw new Error(result.stderr.trim() || `Failed to apply cached patch in ${cwd}`);
+		}
 	} finally {
 		await fs.rm(tempPath, { force: true });
 	}
 }
 
 async function listUntracked(cwd: string): Promise<string[]> {
-	const raw = await $`git ls-files --others --exclude-standard`.cwd(cwd).quiet().text();
+	const raw = getGitText(cwd, ["ls-files", "--others", "--exclude-standard"]);
 	return raw
 		.split("\n")
 		.map(line => line.trim())
@@ -234,7 +270,7 @@ async function listUntracked(cwd: string): Promise<string[]> {
 
 async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise<string> {
 	// Check if HEAD advanced (task committed changes)
-	const currentHead = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().nothrow().text()).trim();
+	const currentHead = runGit(repoDir, ["rev-parse", "HEAD"]).stdout.trim();
 	const headAdvanced = currentHead && currentHead !== rb.headCommit;
 
 	if (headAdvanced) {
@@ -242,16 +278,12 @@ async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise
 		const parts: string[] = [];
 
 		// Committed changes since baseline
-		const committedDiff = await $`git diff-tree -r -p --binary ${rb.headCommit} ${currentHead}`
-			.cwd(repoDir)
-			.quiet()
-			.nothrow()
-			.text();
+		const committedDiff = runGit(repoDir, ["diff-tree", "-r", "-p", "--binary", rb.headCommit, currentHead]).stdout;
 		if (committedDiff.trim()) parts.push(committedDiff);
 
 		// Uncommitted changes on top of the new HEAD
-		const staged = await $`git diff --cached --binary`.cwd(repoDir).quiet().text();
-		const unstaged = await $`git diff --binary`.cwd(repoDir).quiet().text();
+		const staged = getGitText(repoDir, ["diff", "--cached", "--binary"]);
+		const unstaged = getGitText(repoDir, ["diff", "--binary"]);
 		if (staged.trim()) parts.push(staged);
 		if (unstaged.trim()) parts.push(unstaged);
 
@@ -262,8 +294,8 @@ async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise
 		if (newUntracked.length > 0) {
 			const nullPath = getGitNoIndexNullPath();
 			const untrackedDiffs = await Promise.all(
-				newUntracked.map(entry =>
-					$`git diff --binary --no-index ${nullPath} ${entry}`.cwd(repoDir).quiet().nothrow().text(),
+				newUntracked.map(async entry =>
+					getGitText(repoDir, ["diff", "--binary", "--no-index", nullPath, entry], { allowedExitCodes: [0, 1] }),
 				),
 			);
 			parts.push(...untrackedDiffs.filter(d => d.trim()));
@@ -275,10 +307,10 @@ async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise
 	// HEAD unchanged: use temp index approach (subtracts baseline from delta)
 	const tempIndex = path.join(os.tmpdir(), `omp-task-index-${Snowflake.next()}`);
 	try {
-		await $`git read-tree ${rb.headCommit}`.cwd(repoDir).env({ GIT_INDEX_FILE: tempIndex });
+		getGitText(repoDir, ["read-tree", rb.headCommit], { env: { GIT_INDEX_FILE: tempIndex } });
 		await applyPatchToIndex(repoDir, rb.staged, tempIndex);
 		await applyPatchToIndex(repoDir, rb.unstaged, tempIndex);
-		const diff = await $`git diff --binary`.cwd(repoDir).env({ GIT_INDEX_FILE: tempIndex }).quiet().text();
+		const diff = getGitText(repoDir, ["diff", "--binary"], { env: { GIT_INDEX_FILE: tempIndex } });
 
 		const currentUntracked = await listUntracked(repoDir);
 		const baselineUntracked = new Set(rb.untracked);
@@ -288,8 +320,8 @@ async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise
 
 		const nullPath = getGitNoIndexNullPath();
 		const untrackedDiffs = await Promise.all(
-			newUntracked.map(entry =>
-				$`git diff --binary --no-index ${nullPath} ${entry}`.cwd(repoDir).quiet().nothrow().text(),
+			newUntracked.map(async entry =>
+				getGitText(repoDir, ["diff", "--binary", "--no-index", nullPath, entry], { allowedExitCodes: [0, 1] }),
 			),
 		);
 		return `${diff}${diff && !diff.endsWith("\n") ? "\n" : ""}${untrackedDiffs.join("\n")}`;
@@ -359,25 +391,23 @@ export async function applyNestedPatches(
 		}
 
 		// Commit so nested repo history reflects the task changes
-		const hasChanges = (
-			await $`git --no-optional-locks status --porcelain`.cwd(nestedDir).quiet().nothrow().text()
-		).trim();
+		const hasChanges = runGit(nestedDir, ["--no-optional-locks", "status", "--porcelain"]).stdout.trim();
 		if (hasChanges) {
 			const msg = (await commitMessage?.(combinedDiff)) ?? "changes from isolated task(s)";
-			await $`git add -A`.cwd(nestedDir).quiet();
-			await $`git commit -m ${msg}`.cwd(nestedDir).quiet();
+			getGitText(nestedDir, ["add", "-A"]);
+			getGitText(nestedDir, ["commit", "-m", msg]);
 		}
 	}
 }
 
 export async function cleanupWorktree(dir: string): Promise<void> {
 	try {
-		const commonDirRaw = await $`git rev-parse --git-common-dir`.cwd(dir).quiet().nothrow().text();
+		const commonDirRaw = runGit(dir, ["rev-parse", "--git-common-dir"]).stdout;
 		const commonDir = commonDirRaw.trim();
 		if (commonDir) {
 			const resolvedCommon = path.resolve(dir, commonDir);
 			const repoRoot = path.dirname(resolvedCommon);
-			await $`git worktree remove -f ${dir}`.cwd(repoRoot).quiet().nothrow();
+			runGit(repoRoot, ["worktree", "remove", "-f", dir]);
 		}
 	} finally {
 		await fs.rm(dir, { recursive: true, force: true });
@@ -401,9 +431,9 @@ export async function ensureFuseOverlay(baseCwd: string, id: string): Promise<st
 	const mergedDir = path.join(baseDir, "merged");
 
 	// Clean up any stale mount at this path (linux only)
-	const fusermount = Bun.which("fusermount3") ?? Bun.which("fusermount");
+	const fusermount = whichSync("fusermount3") ?? whichSync("fusermount");
 	if (fusermount) {
-		await $`${fusermount} -u ${mergedDir}`.quiet().nothrow();
+		runCommand(fusermount, ["-u", mergedDir]);
 	}
 
 	await fs.rm(baseDir, { recursive: true, force: true });
@@ -411,7 +441,7 @@ export async function ensureFuseOverlay(baseCwd: string, id: string): Promise<st
 	await fs.mkdir(workDir, { recursive: true });
 	await fs.mkdir(mergedDir, { recursive: true });
 
-	const binary = Bun.which("fuse-overlayfs");
+	const binary = whichSync("fuse-overlayfs");
 	if (!binary) {
 		await fs.rm(baseDir, { recursive: true, force: true });
 		throw new Error(
@@ -419,11 +449,9 @@ export async function ensureFuseOverlay(baseCwd: string, id: string): Promise<st
 		);
 	}
 
-	const result = await $`${binary} -o lowerdir=${repoRoot},upperdir=${upperDir},workdir=${workDir} ${mergedDir}`
-		.quiet()
-		.nothrow();
+	const result = runCommand(binary, [`-o`, `lowerdir=${repoRoot},upperdir=${upperDir},workdir=${workDir}`, mergedDir]);
 	if (result.exitCode !== 0) {
-		const stderr = result.stderr.toString().trim();
+		const stderr = result.stderr.trim();
 		await fs.rm(baseDir, { recursive: true, force: true });
 		throw new Error(`fuse-overlayfs mount failed (exit ${result.exitCode}): ${stderr}`);
 	}
@@ -433,9 +461,9 @@ export async function ensureFuseOverlay(baseCwd: string, id: string): Promise<st
 
 export async function cleanupFuseOverlay(mergedDir: string): Promise<void> {
 	try {
-		const fusermount = Bun.which("fusermount3") ?? Bun.which("fusermount");
+		const fusermount = whichSync("fusermount3") ?? whichSync("fusermount");
 		if (fusermount) {
-			await $`${fusermount} -u ${mergedDir}`.quiet().nothrow();
+			runCommand(fusermount, ["-u", mergedDir]);
 		}
 	} finally {
 		// baseDir is the parent of the merged directory
@@ -518,16 +546,16 @@ export async function commitToBranch(
 
 	// Only create a branch if the root repo has changes
 	if (rootPatch.trim()) {
-		await $`git branch ${branchName} HEAD`.cwd(repoRoot).quiet();
+		getGitText(repoRoot, ["branch", branchName, "HEAD"]);
 		const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
 		try {
-			await $`git worktree add ${tmpDir} ${branchName}`.cwd(repoRoot).quiet();
+			getGitText(repoRoot, ["worktree", "add", tmpDir, branchName]);
 			const patchPath = path.join(os.tmpdir(), `omp-branch-patch-${Snowflake.next()}.patch`);
 			try {
-				await Bun.write(patchPath, rootPatch);
-				const applyResult = await $`git apply --binary ${patchPath}`.cwd(tmpDir).quiet().nothrow();
+				await fs.writeFile(patchPath, rootPatch, "utf8");
+				const applyResult = runGit(tmpDir, ["apply", "--binary", patchPath]);
 				if (applyResult.exitCode !== 0) {
-					const stderr = applyResult.stderr.toString().slice(0, 2000);
+					const stderr = applyResult.stderr.slice(0, 2000);
 					logger.error("commitToBranch: git apply failed", {
 						taskId,
 						exitCode: applyResult.exitCode,
@@ -540,11 +568,11 @@ export async function commitToBranch(
 			} finally {
 				await fs.rm(patchPath, { force: true });
 			}
-			await $`git add -A`.cwd(tmpDir).quiet();
+			getGitText(tmpDir, ["add", "-A"]);
 			const msg = (commitMessage && (await commitMessage(rootPatch))) || fallbackMessage;
-			await $`git commit -m ${msg}`.cwd(tmpDir).quiet();
+			getGitText(tmpDir, ["commit", "-m", msg]);
 		} finally {
-			await $`git worktree remove -f ${tmpDir}`.cwd(repoRoot).quiet().nothrow();
+			runGit(repoRoot, ["worktree", "remove", "-f", tmpDir]);
 			await fs.rm(tmpDir, { recursive: true, force: true });
 		}
 	}
@@ -571,11 +599,11 @@ export async function mergeTaskBranches(
 	const failed: string[] = [];
 
 	for (const { branchName } of branches) {
-		const result = await $`git cherry-pick ${branchName}`.cwd(repoRoot).quiet().nothrow();
+		const result = runGit(repoRoot, ["cherry-pick", branchName]);
 
 		if (result.exitCode !== 0) {
-			await $`git cherry-pick --abort`.cwd(repoRoot).quiet().nothrow();
-			const stderr = result.stderr.toString().trim();
+			runGit(repoRoot, ["cherry-pick", "--abort"]);
+			const stderr = result.stderr.trim();
 			failed.push(branchName);
 			return {
 				merged,
@@ -593,6 +621,6 @@ export async function mergeTaskBranches(
 /** Clean up temporary task branches. */
 export async function cleanupTaskBranches(repoRoot: string, branches: string[]): Promise<void> {
 	for (const branch of branches) {
-		await $`git branch -D ${branch}`.cwd(repoRoot).quiet().nothrow();
+		runGit(repoRoot, ["branch", "-D", branch]);
 	}
 }

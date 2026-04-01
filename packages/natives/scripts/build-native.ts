@@ -1,17 +1,18 @@
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { $ } from "bun";
+import { moduleDir, spawnProcessSync } from "@oh-my-pi/pi-utils";
 
-const repoRoot = path.join(import.meta.dir, "../../..");
+const scriptDir = moduleDir(import.meta.url);
+const repoRoot = path.join(scriptDir, "../../..");
 const rustDir = path.join(repoRoot, "crates/pi-natives");
-const nativeDir = path.join(import.meta.dir, "../native");
+const nativeDir = path.join(scriptDir, "../native");
 
 const isDev = process.argv.includes("--dev");
-const crossTarget = Bun.env.CROSS_TARGET;
-const targetPlatform = Bun.env.TARGET_PLATFORM || process.platform;
-const targetArch = Bun.env.TARGET_ARCH || process.arch;
-const configuredVariantRaw = Bun.env.TARGET_VARIANT;
+const crossTarget = process.env.CROSS_TARGET;
+const targetPlatform = process.env.TARGET_PLATFORM || process.platform;
+const targetArch = process.env.TARGET_ARCH || process.arch;
+const configuredVariantRaw = process.env.TARGET_VARIANT;
 const isCrossCompile = Boolean(crossTarget) || targetPlatform !== process.platform || targetArch !== process.arch;
 
 type X64Variant = "modern" | "baseline";
@@ -29,8 +30,8 @@ if (configuredVariantRaw) {
 
 function runCommand(command: string, args: string[]): string | null {
 	try {
-		const result = Bun.spawnSync([command, ...args], { stdout: "pipe", stderr: "pipe" });
-		if (result.exitCode !== 0) return null;
+		const result = spawnProcessSync(command, args, { stdio: "pipe", env: process.env });
+		if (result.status !== 0 || !result.stdout) return null;
 		return result.stdout.toString("utf-8").trim();
 	} catch {
 		return null;
@@ -82,13 +83,13 @@ const effectiveVariant = resolveEffectiveVariant();
 const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
 
 // Default to native CPU optimization for local builds; explicit variants use fixed ISA targets.
-if (!isCrossCompile && !Bun.env.RUSTFLAGS) {
+if (!isCrossCompile && !process.env.RUSTFLAGS) {
 	if (effectiveVariant === "modern") {
-		Bun.env.RUSTFLAGS = "-C target-cpu=x86-64-v3";
+		process.env.RUSTFLAGS = "-C target-cpu=x86-64-v3";
 	} else if (effectiveVariant === "baseline") {
-		Bun.env.RUSTFLAGS = "-C target-cpu=x86-64-v2";
+		process.env.RUSTFLAGS = "-C target-cpu=x86-64-v2";
 	} else {
-		Bun.env.RUSTFLAGS = "-C target-cpu=native";
+		process.env.RUSTFLAGS = "-C target-cpu=native";
 	}
 }
 
@@ -141,15 +142,19 @@ if (!isDev) cargoArgs.push("--release");
 if (crossTarget) cargoArgs.push("--target", crossTarget);
 
 console.log(`Building pi-natives for ${targetPlatform}-${targetArch}${variantSuffix}${isDev ? " (debug)" : ""}…`);
-const buildResult = await $`cargo ${cargoArgs}`.cwd(rustDir).nothrow();
-if (buildResult.exitCode !== 0) {
+const buildResult = spawnProcessSync("cargo", cargoArgs, {
+	cwd: rustDir,
+	stdio: "pipe",
+	env: process.env,
+});
+if (buildResult.status !== 0) {
 	const stderr = buildResult.stderr?.toString("utf-8") ?? "";
 	throw new Error(`cargo build --release failed${stderr ? `:\n${stderr}` : ""}`);
 }
 
 const profile = isDev ? "debug" : "release";
 const targetRoots = [
-	Bun.env.CARGO_TARGET_DIR ? path.resolve(Bun.env.CARGO_TARGET_DIR) : undefined,
+	process.env.CARGO_TARGET_DIR ? path.resolve(process.env.CARGO_TARGET_DIR) : undefined,
 	path.join(repoRoot, "target"),
 	path.join(rustDir, "target"),
 ].filter((v): v is string => Boolean(v));

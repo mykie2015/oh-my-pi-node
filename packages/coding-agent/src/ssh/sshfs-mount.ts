@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getRemoteDir, postmortem } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { getRemoteDir, postmortem, spawnProcessSync, whichSync } from "@oh-my-pi/pi-utils";
 import { getControlDir, getControlPathTemplate, type SSHConnectionTarget } from "./connection-manager";
 import { buildSshTarget, sanitizeHostName } from "./utils";
 
@@ -59,27 +58,35 @@ function buildSshfsArgs(host: SSHConnectionTarget): string[] {
 	return args;
 }
 
+function runQuiet(command: string, args: readonly string[]): { exitCode: number | null; stderr: string } {
+	const result = spawnProcessSync(command, args, { stdio: "pipe" });
+	return {
+		exitCode: result.error ? null : (result.status ?? null),
+		stderr: result.stderr?.toString("utf8").trim() ?? result.error?.message ?? "",
+	};
+}
+
 async function unmountPath(path: string): Promise<boolean> {
-	const fusermount = Bun.which("fusermount") ?? Bun.which("fusermount3");
+	const fusermount = whichSync("fusermount") ?? whichSync("fusermount3");
 	if (fusermount) {
-		const result = await $`${fusermount} -u ${path}`.quiet().nothrow();
+		const result = runQuiet(fusermount, ["-u", path]);
 		if (result.exitCode === 0) return true;
 	}
 
-	const umount = Bun.which("umount");
+	const umount = whichSync("umount");
 	if (!umount) return false;
-	const result = await $`${umount} ${path}`.quiet().nothrow();
+	const result = runQuiet(umount, [path]);
 	return result.exitCode === 0;
 }
 
 export function hasSshfs(): boolean {
-	return Bun.which("sshfs") !== null;
+	return whichSync("sshfs") !== undefined;
 }
 
 export async function isMounted(path: string): Promise<boolean> {
-	const mountpoint = Bun.which("mountpoint");
+	const mountpoint = whichSync("mountpoint");
 	if (!mountpoint) return false;
-	const result = await $`${mountpoint} -q ${path}`.quiet().nothrow();
+	const result = runQuiet(mountpoint, ["-q", path]);
 	return result.exitCode === 0;
 }
 
@@ -102,10 +109,12 @@ export async function mountRemote(host: SSHConnectionTarget, remotePath = "/"): 
 
 	const target = `${buildSshTarget(host.username, host.host)}:${remotePath}`;
 	const args = buildSshfsArgs(host);
-	const result = await $`sshfs ${args} ${target} ${mountPath}`.nothrow();
+	const sshfs = whichSync("sshfs");
+	if (!sshfs) return undefined;
+	const result = runQuiet(sshfs, [...args, target, mountPath]);
 
 	if (result.exitCode !== 0) {
-		const detail = result.stderr.toString().trim();
+		const detail = result.stderr.trim();
 		const suffix = detail ? `: ${detail}` : "";
 		throw new Error(`Failed to mount ${target}${suffix}`);
 	}

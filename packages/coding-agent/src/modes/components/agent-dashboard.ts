@@ -32,7 +32,7 @@ import {
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { stringify as stringifyYaml } from "yaml";
 import { getConfigDirs } from "../../config";
 import type { ModelRegistry } from "../../config/model-registry";
 import {
@@ -695,12 +695,12 @@ export class AgentDashboard extends Container {
 			}
 		}
 
-		const frontmatter = YAML.stringify({
+		const frontmatter = stringifyYaml({
 			name: spec.identifier,
 			description: spec.whenToUse,
 		}).trimEnd();
 		const content = `---\n${frontmatter}\n---\n\n${spec.systemPrompt.trim()}\n`;
-		await Bun.write(filePath, content);
+		await fs.writeFile(filePath, content, "utf8");
 		await this.#reloadData();
 		this.#clearCreateFlow();
 		this.#notice = `Created agent ${spec.identifier} at ${shortenPath(filePath)}`;

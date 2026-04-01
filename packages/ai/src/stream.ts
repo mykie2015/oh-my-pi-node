@@ -308,7 +308,7 @@ export async function completeSimple<TApi extends Api>(
 
 const MIN_OUTPUT_TOKENS = 1024;
 export const OUTPUT_FALLBACK_BUFFER = 4000;
-const ANTHROPIC_USE_INTERLEAVED_THINKING = Bun.env.PI_NO_INTERLEAVED_THINKING !== "1";
+const ANTHROPIC_USE_INTERLEAVED_THINKING = $env.PI_NO_INTERLEAVED_THINKING !== "1";
 
 export const ANTHROPIC_THINKING: Record<Effort, number> = {
 	minimal: 1024,

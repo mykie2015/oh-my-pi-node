@@ -1,5 +1,4 @@
-import { $env, logger, Snowflake } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { $env, logger, Snowflake, spawnProcessSync } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { htmlToBasicMarkdown } from "../web/scrapers/types";
 import { createCancellationError, getAbortReason, getExecutionCancellationError } from "./cancellation";
@@ -195,7 +194,7 @@ export interface PythonKernelAvailability {
 }
 
 export async function checkPythonKernelAvailability(cwd: string): Promise<PythonKernelAvailability> {
-	if (Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test" || $env.PI_PYTHON_SKIP_CHECK === "1") {
+	if ($env.BUN_ENV === "test" || $env.NODE_ENV === "test" || $env.PI_PYTHON_SKIP_CHECK === "1") {
 		return { ok: true };
 	}
 
@@ -207,14 +206,21 @@ export async function checkPythonKernelAvailability(cwd: string): Promise<Python
 	try {
 		const settings = await Settings.init();
 		const { env } = settings.getShellConfig();
-		const baseEnv = filterEnv(env);
-		const runtime = resolvePythonRuntime(cwd, baseEnv);
-		const checkScript =
-			"import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('kernel_gateway') and importlib.util.find_spec('ipykernel') else 1)";
-		const result = await $`${runtime.pythonPath} -c ${checkScript}`.quiet().nothrow().cwd(cwd).env(runtime.env);
-		if (result.exitCode === 0) {
-			return { ok: true, pythonPath: runtime.pythonPath };
-		}
+			const baseEnv = filterEnv(env);
+			const runtime = resolvePythonRuntime(cwd, baseEnv);
+			const checkScript =
+				"import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('kernel_gateway') and importlib.util.find_spec('ipykernel') else 1)";
+			const result = spawnProcessSync(runtime.pythonPath, ["-c", checkScript], {
+				cwd,
+				env: runtime.env,
+				stdio: "pipe",
+			});
+			if (result.error) {
+				throw result.error;
+			}
+			if (result.status === 0) {
+				return { ok: true, pythonPath: runtime.pythonPath };
+			}
 		return {
 			ok: false,
 			pythonPath: runtime.pythonPath,

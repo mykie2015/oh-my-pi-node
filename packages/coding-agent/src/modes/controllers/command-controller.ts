@@ -11,8 +11,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { copyToClipboard } from "@oh-my-pi/pi-natives";
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { formatDuration, Snowflake, setProjectDir, sleep, spawnProcessSync, whichSync } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
@@ -33,6 +32,21 @@ import { replaceTabs } from "../../tools/render-utils";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog";
 import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
+
+const ANSI_ESCAPE_RE = /\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+
+function stripAnsiText(text: string): string {
+	return text.replace(ANSI_ESCAPE_RE, "");
+}
+
+function runCommand(command: string, args: readonly string[]): { exitCode: number | null; stdout: string; stderr: string } {
+	const result = spawnProcessSync(command, args, { stdio: "pipe" });
+	return {
+		exitCode: result.error ? null : (result.status ?? null),
+		stdout: result.stdout?.toString("utf8").trim() ?? "",
+		stderr: result.stderr?.toString("utf8").trim() ?? result.error?.message ?? "",
+	};
+}
 
 export class CommandController {
 	constructor(private readonly ctx: InteractiveModeContext) {}
@@ -76,14 +90,14 @@ export class CommandController {
 	async handleDebugTranscriptCommand(): Promise<void> {
 		try {
 			const width = Math.max(1, this.ctx.ui.terminal.columns);
-			const renderedLines = this.ctx.chatContainer.render(width).map(line => replaceTabs(Bun.stripANSI(line)));
+			const renderedLines = this.ctx.chatContainer.render(width).map(line => replaceTabs(stripAnsiText(line)));
 			const rendered = renderedLines.join("\n").trimEnd();
 			if (!rendered) {
 				this.ctx.showError("No messages to dump yet.");
 				return;
 			}
 			const tmpPath = path.join(os.tmpdir(), `${Snowflake.next()}-tmp.txt`);
-			await Bun.write(tmpPath, `${rendered}\n`);
+			await fs.writeFile(tmpPath, `${rendered}\n`, "utf8");
 			this.ctx.showStatus(`Debug transcript written to:\n${tmpPath}`);
 		} catch (error: unknown) {
 			this.ctx.showError(
@@ -155,7 +169,13 @@ export class CommandController {
 		}
 
 		try {
-			const authResult = await $`gh auth status`.quiet().nothrow();
+			const gh = whichSync("gh");
+			if (!gh) {
+				await cleanupTempFile();
+				this.ctx.showError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/");
+				return;
+			}
+			const authResult = runCommand(gh, ["auth", "status"]);
 			if (authResult.exitCode !== 0) {
 				await cleanupTempFile();
 				this.ctx.showError("GitHub CLI is not logged in. Run 'gh auth login' first.");
@@ -187,18 +207,24 @@ export class CommandController {
 		};
 
 		try {
-			const result = await $`gh gist create --public=false ${tmpFile}`.quiet().nothrow();
+			const gh = whichSync("gh");
+			if (!gh) {
+				await restoreEditor();
+				this.ctx.showError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/");
+				return;
+			}
+			const result = runCommand(gh, ["gist", "create", "--public=false", tmpFile]);
 			if (loader.signal.aborted) return;
 
 			await restoreEditor();
 
 			if (result.exitCode !== 0) {
-				const errorMsg = result.stderr.toString("utf-8").trim() || "Unknown error";
+				const errorMsg = result.stderr || "Unknown error";
 				this.ctx.showError(`Failed to create gist: ${errorMsg}`);
 				return;
 			}
 
-			const gistUrl = result.stdout.toString("utf-8").trim();
+			const gistUrl = result.stdout;
 			const gistId = gistUrl.split("/").pop();
 			if (!gistId) {
 				this.ctx.showError("Failed to parse gist ID from gh output");
@@ -571,7 +597,7 @@ export class CommandController {
 		if (this.ctx.session.isCompacting) {
 			this.ctx.session.abortCompaction();
 			while (this.ctx.session.isCompacting) {
-				await Bun.sleep(10);
+				await sleep(10);
 			}
 		}
 		await this.ctx.session.newSession();
@@ -768,7 +794,7 @@ export class CommandController {
 
 	async handleSkillCommand(skillPath: string, args: string): Promise<void> {
 		try {
-			const content = await Bun.file(skillPath).text();
+			const content = await fs.readFile(skillPath, "utf8");
 			const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 			const metaLines = [`Skill: ${skillPath}`];
 			if (args) {

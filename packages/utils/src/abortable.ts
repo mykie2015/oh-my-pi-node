@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { sleep } from "./runtime/process";
 
 export class AbortError extends Error {
 	constructor(signal: AbortSignal) {
@@ -14,7 +15,7 @@ export class AbortError extends Error {
  * Sleep for a given number of milliseconds, respecting abort signal.
  */
 export async function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-	return untilAborted(signal, () => Bun.sleep(ms));
+	return untilAborted(signal, () => sleep(ms));
 }
 
 /**

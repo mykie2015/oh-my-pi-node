@@ -6,7 +6,6 @@ import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { parseArgs } from "../cli/args";
-import { runRootCommand } from "../main";
 
 export default class Index extends Command {
 	static description = "AI coding assistant";
@@ -136,6 +135,7 @@ export default class Index extends Command {
 
 	async run(): Promise<void> {
 		const parsed = parseArgs(this.argv);
+		const { runRootCommand } = await import("../main");
 		await runRootCommand(parsed, this.argv);
 	}
 }

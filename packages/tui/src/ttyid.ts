@@ -1,4 +1,4 @@
-import { CString, dlopen, FFIType } from "bun:ffi";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
@@ -16,16 +16,13 @@ export function getTtyPath(): string | null {
 		}
 	} else if (os.platform() !== "win32") {
 		try {
-			const libName = os.platform() === "darwin" ? "libSystem.B.dylib" : "libc.so.6";
-			const lib = dlopen(libName, {
-				ttyname: { args: [FFIType.i32], returns: FFIType.ptr },
+			const result = spawnSync("tty", [], {
+				stdio: ["inherit", "pipe", "ignore"],
+				encoding: "utf8",
 			});
-			try {
-				const result = lib.symbols.ttyname(0);
-				return result ? new CString(result).toString() : null;
-			} finally {
-				lib.close();
-			}
+			if (result.status !== 0) return null;
+			const ttyPath = result.stdout.trim();
+			return ttyPath.startsWith("/dev/") ? ttyPath : null;
 		} catch {
 			return null;
 		}

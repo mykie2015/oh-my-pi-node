@@ -1,5 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { logger, spawnProcessSync, whichSync } from "@oh-my-pi/pi-utils";
 import { resolvePython } from "./transcriber";
 
 export interface DownloadProgress {
@@ -14,18 +13,33 @@ export interface EnsureOptions {
 
 // ── Recording tool ─────────────────────────────────────────────────
 
+function runQuiet(command: string, args: readonly string[]): { exitCode: number | null; stderr: string } {
+	const result = spawnProcessSync(command, args, { stdio: "pipe" });
+	return {
+		exitCode: result.error ? null : (result.status ?? null),
+		stderr: result.stderr?.toString("utf8").trim() ?? result.error?.message ?? "",
+	};
+}
+
 async function ensureRecordingTool(options?: EnsureOptions): Promise<void> {
-	if (Bun.which("sox")) return;
-	if (Bun.which("ffmpeg")) return;
-	if (process.platform === "linux" && Bun.which("arecord")) return;
+	if (whichSync("sox")) return;
+	if (whichSync("ffmpeg")) return;
+	if (process.platform === "linux" && whichSync("arecord")) return;
 
 	// Windows: PowerShell mciSendString is always available as fallback
 	if (process.platform === "win32") {
 		// Try to get ffmpeg for better quality, but don't block on failure
 		options?.onProgress?.({ stage: "Trying to install FFmpeg via winget..." });
-		const result = await $`winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements`
-			.quiet()
-			.nothrow();
+		const winget = whichSync("winget");
+		if (!winget) return;
+		const result = runQuiet(winget, [
+			"install",
+			"--id",
+			"Gyan.FFmpeg",
+			"-e",
+			"--accept-source-agreements",
+			"--accept-package-agreements",
+		]);
 		if (result.exitCode === 0) {
 			logger.debug("FFmpeg installed via winget");
 		}
@@ -46,19 +60,15 @@ async function ensurePythonWhisper(options?: EnsureOptions): Promise<void> {
 	}
 
 	// Check if whisper module is already importable
-	const check = Bun.spawnSync([pythonCmd, "-c", "import whisper"], {
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	if (check.exitCode === 0) return;
+	const check = spawnProcessSync(pythonCmd, ["-c", "import whisper"], { stdio: "pipe" });
+	if (!check.error && check.status === 0) return;
 
 	options?.onProgress?.({ stage: "Installing openai-whisper (this may take a few minutes)..." });
 	logger.debug("Installing openai-whisper via pip");
 
-	const install = await $`${pythonCmd} -m pip install -q openai-whisper`.quiet().nothrow();
+	const install = runQuiet(pythonCmd, ["-m", "pip", "install", "-q", "openai-whisper"]);
 	if (install.exitCode !== 0) {
-		const stderr = install.stderr.toString().trim();
-		throw new Error(`Failed to install openai-whisper: ${stderr.split("\n").pop()}`);
+		throw new Error(`Failed to install openai-whisper: ${install.stderr.split("\n").pop()}`);
 	}
 	logger.debug("openai-whisper installed successfully");
 }

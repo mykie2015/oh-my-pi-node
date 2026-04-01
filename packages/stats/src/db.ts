@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database } from "@oh-my-pi/pi-utils/runtime/sqlite";
 import * as fs from "node:fs/promises";
 import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
 import type {

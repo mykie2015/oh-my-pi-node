@@ -12,8 +12,7 @@
  * Architecture reverse-engineered from Perplexity macOS app (ai.perplexity.mac).
  */
 import * as os from "node:os";
-import { $env } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { $env, spawnProcessSync } from "@oh-my-pi/pi-utils";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const API_VERSION = "2.18";
@@ -62,9 +61,9 @@ async function extractFromNativeApp(): Promise<string | null> {
 	if (os.platform() !== "darwin") return null;
 
 	try {
-		const result = await $`defaults read ${NATIVE_APP_BUNDLE} authToken`.quiet().nothrow();
-		if (result.exitCode !== 0) return null;
-		const token = result.text().trim();
+		const result = spawnProcessSync("defaults", ["read", NATIVE_APP_BUNDLE, "authToken"], { stdio: "pipe" });
+		if (result.status !== 0) return null;
+		const token = result.stdout?.toString("utf8").trim();
 		if (!token || token === "(null)") return null;
 		return token;
 	} catch {

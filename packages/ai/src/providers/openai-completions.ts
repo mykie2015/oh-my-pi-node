@@ -1,4 +1,4 @@
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, hashText64Base36 } from "@oh-my-pi/pi-utils";
 import OpenAI from "openai";
 import type {
 	ChatCompletionAssistantMessageParam,
@@ -10,7 +10,7 @@ import type {
 	ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions";
 import { calculateCost } from "../models";
-import { getEnvApiKey } from "../stream";
+import { getEnvApiKey } from "../env-api-key";
 import {
 	type AssistantMessage,
 	type Context,
@@ -33,12 +33,13 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	createFirstEventWatchdog,
+	getOpenAIFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 	markFirstStreamEvent,
 } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
+import { DEFAULT_OPENAI_BASE_URL, resolveOpenAIModelBaseUrl } from "../utils/openai-base-url";
 import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import { mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
@@ -199,15 +200,20 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				? AbortSignal.any([options.signal, requestAbortController.signal])
 				: requestAbortController.signal;
 			const idleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
-			const firstEventWatchdog = createFirstEventWatchdog(getStreamFirstEventTimeoutMs(idleTimeoutMs), () =>
-				requestAbortController.abort(),
-			);
 			const { client, copilotPremiumRequests, baseUrl } = await createClient(
 				model,
 				context,
 				apiKey,
 				options?.headers,
 				options?.initiatorOverride,
+			);
+			const firstEventWatchdog = createFirstEventWatchdog(
+				getOpenAIFirstEventTimeoutMs({
+					idleTimeoutMs,
+					baseUrl,
+					provider: model.provider,
+				}),
+				() => requestAbortController.abort(),
 			);
 			const params = buildParams(model, context, options, baseUrl);
 			options?.onPayload?.(params);
@@ -216,7 +222,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				url: `${baseUrl}/chat/completions`,
+				url: `${baseUrl ?? DEFAULT_OPENAI_BASE_URL}/chat/completions`,
 				body: params,
 			};
 			const openaiStream = await client.chat.completions.create(params, { signal: requestSignal });
@@ -544,6 +550,9 @@ async function createClient(
 	let copilotPremiumRequests: number | undefined;
 
 	let baseUrl = model.baseUrl;
+	if (model.provider === "openai") {
+		baseUrl = resolveOpenAIModelBaseUrl(model.baseUrl);
+	}
 	if (model.provider === "github-copilot") {
 		const hasImages = hasCopilotVisionInput(context.messages);
 		const copilot = buildCopilotDynamicHeaders({
@@ -796,9 +805,7 @@ export function convertMessages(
 
 	const generateFallbackToolCallId = (seed: string): string => {
 		generatedToolCallIdCounter += 1;
-		const hash = Bun.hash
-			.xxHash64(`${model.provider}:${model.id}:${seed}:${generatedToolCallIdCounter}`)
-			.toString(36);
+		const hash = hashText64Base36(`${model.provider}:${model.id}:${seed}:${generatedToolCallIdCounter}`);
 		return `call_${hash}`;
 	};
 

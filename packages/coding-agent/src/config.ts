@@ -8,11 +8,13 @@ import {
 	getProjectDir,
 	isEnoent,
 	logger,
+	moduleDir,
 } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
-import { JSONC, YAML } from "bun";
+import { parse as parseJsonc } from "jsonc-parser";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { expandTilde } from "./tools/path-utils";
 
 const priorityList = [
@@ -37,7 +39,7 @@ export function getPackageDir(): string {
 		return expandTilde(envDir);
 	}
 
-	let dir = import.meta.dir;
+	let dir = moduleDir(import.meta.url);
 	while (dir !== path.dirname(dir)) {
 		if (fs.existsSync(path.join(dir, "package.json"))) {
 			return dir;
@@ -68,7 +70,7 @@ function migrateJsonToYml(jsonPath: string, ymlPath: string) {
 			logger.warn("migrateJsonToYml: invalid json structure", { path: jsonPath });
 			return;
 		}
-		fs.writeFileSync(ymlPath, YAML.stringify(parsed, null, 2));
+		fs.writeFileSync(ymlPath, stringifyYaml(parsed));
 	} catch (error) {
 		logger.warn("migrateJsonToYml: migration failed", { error: String(error) });
 	}
@@ -205,9 +207,9 @@ export class ConfigFile<T> implements IConfigFile<T> {
 
 			let parsed: unknown;
 			if (this.#basePath.endsWith(".json") || this.#basePath.endsWith(".jsonc")) {
-				parsed = JSONC.parse(content);
+				parsed = parseJsonc(content);
 			} else if (this.#basePath.endsWith(".yml") || this.#basePath.endsWith(".yaml")) {
-				parsed = YAML.parse(content);
+				parsed = parseYaml(content);
 			} else {
 				throw new Error(`Invalid config file path: ${this.#basePath}`);
 			}

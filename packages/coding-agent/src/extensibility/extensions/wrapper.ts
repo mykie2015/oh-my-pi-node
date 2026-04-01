@@ -33,17 +33,27 @@ export class RegisteredToolAdapter implements AgentTool<any, any, any> {
 		// enters the custom-renderer path, gets undefined back, and silently
 		// discards tool result text (extensions without renderers show blank).
 		if (registeredTool.definition.renderCall) {
-			this.renderCall = (args: any, options: any, theme: any) =>
-				registeredTool.definition.renderCall!(args, options, theme as Theme);
+			Object.defineProperty(this, "renderCall", {
+				value: (args: any, options: any, theme: any) =>
+					registeredTool.definition.renderCall!(args, options, theme as Theme),
+				enumerable: true,
+				configurable: true,
+				writable: true,
+			});
 		}
 		if (registeredTool.definition.renderResult) {
-			this.renderResult = (result: any, options: any, theme: any, args?: any) =>
-				registeredTool.definition.renderResult!(
-					result,
-					{ expanded: options.expanded, isPartial: options.isPartial, spinnerFrame: options.spinnerFrame },
-					theme as Theme,
-					args,
-				);
+			Object.defineProperty(this, "renderResult", {
+				value: (result: any, options: any, theme: any, args?: any) =>
+					registeredTool.definition.renderResult!(
+						result,
+						{ expanded: options.expanded, isPartial: options.isPartial, spinnerFrame: options.spinnerFrame },
+						theme as Theme,
+						args,
+					),
+				enumerable: true,
+				configurable: true,
+				writable: true,
+			});
 		}
 	}
 

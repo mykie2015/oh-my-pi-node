@@ -12,6 +12,7 @@ import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
+import { $env } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import {
@@ -401,7 +402,7 @@ export class EditTool implements AgentTool<TInput> {
 			PI_EDIT_FUZZY: editFuzzy = "auto",
 			PI_EDIT_FUZZY_THRESHOLD: editFuzzyThreshold = "auto",
 			PI_EDIT_VARIANT: envEditVariant = "auto",
-		} = Bun.env;
+		} = $env;
 
 		if (envEditVariant && envEditVariant !== "auto") {
 			const editMode = normalizeEditMode(envEditVariant);

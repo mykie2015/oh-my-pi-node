@@ -147,8 +147,8 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 	#scheduleFlush(): void {
 		if (this.#flushTimer) return; // Already scheduled
 
-		const now = Bun.nanoseconds();
-		const timeSinceLastFlush = (now - this.#lastFlushTime) / 1e6;
+		const now = performance.now();
+		const timeSinceLastFlush = now - this.#lastFlushTime;
 
 		if (timeSinceLastFlush >= this.#throttleMs) {
 			// Flush immediately if throttle window has passed
@@ -174,7 +174,7 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 		// Merge consecutive deltas for the same content block and type
 		const merged = this.#mergeDeltas(this.#deltaBuffer);
 		this.#deltaBuffer = [];
-		this.#lastFlushTime = Bun.nanoseconds();
+		this.#lastFlushTime = performance.now();
 
 		for (const event of merged) {
 			this.deliver(event);

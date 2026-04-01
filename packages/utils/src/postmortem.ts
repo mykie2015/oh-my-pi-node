@@ -8,6 +8,7 @@
 import inspector from "node:inspector";
 import { isMainThread } from "node:worker_threads";
 import { logger } from ".";
+import { sleep } from "./runtime/process";
 
 // Cleanup reasons, in order of priority/meaning.
 export enum Reason {
@@ -191,7 +192,7 @@ export async function quit(code: number = 0): Promise<void> {
 	if (process.stdout.writableLength > 0) {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		process.stdout.once("drain", resolve);
-		await Promise.race([promise, Bun.sleep(5000)]);
+		await Promise.race([promise, sleep(5000)]);
 	}
 	process.exit(code);
 }

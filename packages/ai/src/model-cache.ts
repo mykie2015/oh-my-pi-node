@@ -2,7 +2,7 @@
  * SQLite-backed model cache for atomic cross-process access.
  * Replaces per-provider JSON files with a single cache.db.
  */
-import { Database } from "bun:sqlite";
+import { Database } from "@oh-my-pi/pi-utils/runtime/sqlite";
 import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import type { Api, Model } from "./types";
 

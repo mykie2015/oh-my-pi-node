@@ -1,3 +1,4 @@
+import { type ChildProcessWithoutNullStreams, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
 /**
  * Process tree management utilities for Bun subprocesses.
  *
@@ -6,13 +7,12 @@
  * - Cross-platform tree kill for process groups (Windows taskkill, Unix -pid).
  * - Convenience helpers: captureText / execText, AbortSignal, timeouts.
  */
-import type { Spawn, Subprocess } from "bun";
 import { terminate } from "./procmgr";
 
 type InMask = "pipe" | "ignore" | Buffer | Uint8Array | null;
 
 /** A Bun subprocess with stdout/stderr always piped (stdin may vary). */
-type PipedSubprocess<In extends InMask = InMask> = Subprocess<In, "pipe", "pipe">;
+type PipedSubprocess<In extends InMask = InMask> = ChildProcessWithoutNullStreams;
 
 // ── Exceptions ───────────────────────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ export class ChildProcess<In extends InMask = InMask> {
 	get killed() {
 		return this.proc.killed;
 	}
-	get stdin(): Bun.SpawnOptions.WritableToIO<In> {
+	get stdin(): NodeJS.WritableStream | null {
 		return this.proc.stdin;
 	}
 
@@ -313,10 +313,8 @@ export class ChildProcess<In extends InMask = InMask> {
 // ── Spawn / exec ─────────────────────────────────────────────────────────────
 
 /** Options for child spawn. Always pipes stdout/stderr. */
-type ChildSpawnOptions<In extends InMask = InMask> = Omit<
-	Spawn.SpawnOptions<In, "pipe", "pipe">,
-	"stdout" | "stderr" | "detached"
-> & {
+type ChildSpawnOptions<In extends InMask = InMask> = Omit<SpawnOptions, "stdio" | "detached"> & {
+	stdin?: In extends "ignore" ? "ignore" : In extends "pipe" ? "pipe" : In;
 	signal?: AbortSignal;
 	detached?: boolean;
 	stderr?: "full" | null;
@@ -325,13 +323,13 @@ type ChildSpawnOptions<In extends InMask = InMask> = Omit<
 /** Spawn a child process with piped stdout/stderr. */
 export function spawn<In extends InMask = InMask>(cmd: string[], opts?: ChildSpawnOptions<In>): ChildProcess<In> {
 	const { timeout = -1, signal, stderr, ...rest } = opts ?? {};
-	const child = Bun.spawn(cmd, {
+	const [command, ...args] = cmd;
+	const child = nodeSpawn(command, args, {
 		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
+		stdio: ["pipe", "pipe", "pipe"],
 		windowsHide: true,
 		...rest,
-	});
+	}) as PipedSubprocess<In>;
 	const cp = new ChildProcess(child, stderr === "full");
 	if (signal) cp.attachSignal(signal);
 	if (timeout > 0) cp.attachTimeout(timeout);

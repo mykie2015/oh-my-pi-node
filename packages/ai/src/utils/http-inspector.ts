@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { getLogsDir } from "@oh-my-pi/pi-utils";
+import { getLogsDir, hashText64Base36, writeTextFileEnsured } from "@oh-my-pi/pi-utils";
 import { extractHttpStatusFromError } from "./retry.js";
 import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
 
@@ -29,11 +29,11 @@ export async function appendRawHttpRequestDumpFor400(
 	}
 
 	const sanitizedDump = sanitizeDump(dump);
-	const fileName = `${Date.now()}-${Bun.hash(JSON.stringify(sanitizedDump)).toString(36)}.json`;
+	const fileName = `${Date.now()}-${hashText64Base36(JSON.stringify(sanitizedDump))}.json`;
 	const filePath = path.join(getLogsDir(), "http-400-requests", fileName);
 
 	try {
-		await Bun.write(filePath, `${JSON.stringify(sanitizedDump, null, 2)}\n`);
+		await writeTextFileEnsured(filePath, `${JSON.stringify(sanitizedDump, null, 2)}\n`);
 		return `${message}\nraw-http-request=${filePath}`;
 	} catch (writeError) {
 		const writeMessage = writeError instanceof Error ? writeError.message : String(writeError);

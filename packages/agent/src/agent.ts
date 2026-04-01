@@ -19,6 +19,7 @@ import {
 	type ToolChoice,
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
+import { sleep } from "@oh-my-pi/pi-utils";
 import { agentLoop, agentLoopContinue } from "./agent-loop";
 import type {
 	AgentContext,
@@ -753,7 +754,7 @@ export class Agent {
 			getToolContext: this.#getToolContext,
 			syncContextBeforeModelCall: async context => {
 				if (this.#listeners.size > 0) {
-					await Bun.sleep(0);
+					await sleep(0);
 				}
 				context.systemPrompt = this.#state.systemPrompt;
 				context.tools = this.#state.tools;

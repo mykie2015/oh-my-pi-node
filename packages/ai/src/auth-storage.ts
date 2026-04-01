@@ -7,11 +7,11 @@
  * - `AuthStorage` class: credential management with round-robin, usage limits, OAuth refresh
  * - `AuthCredentialStore`: concrete SQLite-backed implementation
  */
-import { Database, type Statement } from "bun:sqlite";
+import { Database, type Statement } from "@oh-my-pi/pi-utils/runtime/sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
-import { getEnvApiKey } from "./stream";
+import { getAgentDbPath, hashValue32, hashValue64Hex, logger } from "@oh-my-pi/pi-utils";
+import { getEnvApiKey } from "./env-api-key";
 import type { Provider } from "./types";
 import type {
 	CredentialRankingStrategy,
@@ -487,7 +487,7 @@ export class AuthStorage {
 	 */
 	#getHashedIndex(sessionId: string, total: number): number {
 		if (total <= 1) return 0;
-		return Bun.hash.xxHash32(sessionId) % total;
+		return hashValue32(sessionId) % total;
 	}
 
 	/**
@@ -1003,12 +1003,12 @@ export class AuthStorage {
 		// every OAuth refresh — usage data is per-account, not per-token.
 		const hasStableIdentifier = Boolean(accountId || email);
 		if (!hasStableIdentifier) {
-			const secret = credential.apiKey?.trim() || credential.refreshToken?.trim() || credential.accessToken?.trim();
-			if (secret) {
-				parts.push(`secret:${Bun.hash(secret).toString(16)}`);
-			} else {
-				parts.push("anonymous");
-			}
+				const secret = credential.apiKey?.trim() || credential.refreshToken?.trim() || credential.accessToken?.trim();
+				if (secret) {
+					parts.push(`secret:${hashValue64Hex(secret)}`);
+				} else {
+					parts.push("anonymous");
+				}
 		}
 		return parts.join("|");
 	}
@@ -1031,7 +1031,7 @@ export class AuthStorage {
 			)
 			.sort()
 			.join("\n");
-		return `reports:${Bun.hash(snapshot).toString(16)}`;
+		return `reports:${hashValue64Hex(snapshot)}`;
 	}
 
 	#buildUsageRequest(provider: Provider, credential: UsageCredential, baseUrl?: string): UsageRequestDescriptor {

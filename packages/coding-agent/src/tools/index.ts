@@ -261,7 +261,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		!skipPythonPreflight &&
 		pythonMode !== "bash-only" &&
 		(requestedTools === undefined || requestedTools.includes("python"));
-	const isTestEnv = Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test";
+	const isTestEnv = $env.BUN_ENV === "test" || $env.NODE_ENV === "test";
 	const skipPythonWarm = isTestEnv || $env.PI_PYTHON_SKIP_CHECK === "1";
 	if (shouldCheckPython) {
 		const availability = await logger.timeAsync(

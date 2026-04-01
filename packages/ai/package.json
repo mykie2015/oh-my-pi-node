@@ -33,8 +33,8 @@
 	},
 	"scripts": {
 		"check": "tsgo -p tsconfig.json",
-		"generate-models": "bun scripts/generate-models.ts",
-		"test": "bun test"
+		"generate-models": "pnpm exec tsx scripts/generate-models.ts",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.78",
@@ -49,12 +49,6 @@
 		"openai": "^6.25",
 		"partial-json": "^0.1",
 		"zod": "^4.3"
-	},
-	"devDependencies": {
-		"@types/bun": "^1.3"
-	},
-	"engines": {
-		"bun": ">=1.3.7"
 	},
 	"files": [
 		"src",

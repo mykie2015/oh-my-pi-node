@@ -29,22 +29,16 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"scripts": {
-		"build:native": "bun scripts/build-native.ts",
-		"dev:native": "bun scripts/build-native.ts --dev",
-		"embed:native": "bun scripts/embed-native.ts",
+		"build:native": "pnpm exec tsx scripts/build-native.ts",
+		"dev:native": "pnpm exec tsx scripts/build-native.ts --dev",
+		"embed:native": "pnpm exec tsx scripts/embed-native.ts",
 		"check": "biome check . && tsgo -p tsconfig.json",
 		"fix": "biome check --write --unsafe .",
-		"test": "bun run build:native && bun test",
-		"bench": "bun bench/grep.ts"
+		"test": "pnpm run build:native && vitest run",
+		"bench": "pnpm exec tsx bench/grep.ts"
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-utils": "workspace:*"
-	},
-	"devDependencies": {
-		"@types/bun": "^1.3"
-	},
-	"engines": {
-		"bun": ">=1.3.7"
 	},
 	"files": [
 		"src",

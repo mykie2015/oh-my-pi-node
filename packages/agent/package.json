@@ -28,18 +28,14 @@
 	"types": "./src/index.ts",
 	"scripts": {
 		"check": "tsgo -p tsconfig.json",
-		"test": "bun test"
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-ai": "workspace:*",
 		"@oh-my-pi/pi-utils": "workspace:*"
 	},
 	"devDependencies": {
-		"@sinclair/typebox": "^0.34",
-		"@types/bun": "^1.3"
-	},
-	"engines": {
-		"bun": ">=1.3.7"
+		"@sinclair/typebox": "^0.34"
 	},
 	"files": [
 		"src",

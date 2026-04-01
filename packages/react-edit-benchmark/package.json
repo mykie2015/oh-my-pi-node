@@ -16,9 +16,10 @@
 		"react-edit-benchmark": "src/index.ts"
 	},
 	"scripts": {
-		"start": "bun run src/index.ts",
-		"generate": "bun run src/generate.ts --react-dir /tmp/react-source --count-per-type 4",
-		"check": "tsgo -p tsconfig.json --noEmit"
+		"start": "pnpm exec tsx src/index.ts",
+		"generate": "pnpm exec tsx src/generate.ts --react-dir /tmp/react-source --count-per-type 4",
+		"check": "tsgo -p tsconfig.json --noEmit",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@babel/generator": "^7.29",
@@ -34,10 +35,6 @@
 	},
 	"devDependencies": {
 		"@types/babel__generator": "^7.27",
-		"@types/babel__traverse": "^7.28",
-		"@types/bun": "^1.3"
-	},
-	"engines": {
-		"bun": ">=1.3.7"
+		"@types/babel__traverse": "^7.28"
 	}
 }
